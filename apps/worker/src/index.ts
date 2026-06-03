@@ -51,8 +51,18 @@ async function main(): Promise<void> {
 
   await runIngestionCycle()
 
-  cron.schedule('*/5 * * * *', runIngestionCycle)
+  const task = cron.schedule('*/5 * * * *', runIngestionCycle)
   console.log('[worker] cron scheduled — polling every 5 minutes')
+
+  const shutdown = async () => {
+    console.log('[worker] shutting down…')
+    task.stop()
+    await redis.disconnect()
+    process.exit(0)
+  }
+
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
 }
 
 main().catch(err => {
