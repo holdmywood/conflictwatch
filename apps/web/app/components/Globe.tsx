@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
 
 export interface ConflictPoint {
@@ -24,8 +24,25 @@ function threatColor(level: number): string {
   return '#22c55e'
 }
 
+function makeLabel(c: ConflictPoint): string {
+  return `<div style="background:#111827;padding:6px 10px;border-radius:4px;font-size:12px;color:#e5e7eb">
+    <strong>${c.name}</strong><br/>Threat: ${c.threatLevel}/5
+  </div>`
+}
+
+function pointColorFn(d: object) { return threatColor((d as ConflictPoint).threatLevel) }
+function pointRadiusFn(d: object) { return 0.4 + (d as ConflictPoint).threatLevel * 0.15 }
+
 export default function Globe({ conflicts, onSelect }: GlobeProps) {
   const globeRef = useRef<any>(null)
+  const [dimensions, setDimensions] = useState({ width: 1920, height: 1080 })
+
+  useEffect(() => {
+    const update = () => setDimensions({ width: window.innerWidth, height: window.innerHeight })
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
   useEffect(() => {
     if (globeRef.current) {
@@ -58,18 +75,13 @@ export default function Globe({ conflicts, onSelect }: GlobeProps) {
       pointsData={conflicts}
       pointLat="lat"
       pointLng="lng"
-      pointColor={(d: object) => threatColor((d as ConflictPoint).threatLevel)}
-      pointRadius={(d: object) => 0.4 + (d as ConflictPoint).threatLevel * 0.15}
+      pointColor={pointColorFn}
+      pointRadius={pointRadiusFn}
       pointAltitude={0.02}
-      pointLabel={(d: object) => {
-        const c = d as ConflictPoint
-        return `<div style="background:#111827;padding:6px 10px;border-radius:4px;font-size:12px;color:#e5e7eb">
-          <strong>${c.name}</strong><br/>Threat: ${c.threatLevel}/5
-        </div>`
-      }}
+      pointLabel={(d: object) => makeLabel(d as ConflictPoint)}
       onPointClick={handleClick}
-      width={typeof window !== 'undefined' ? window.innerWidth : 1920}
-      height={typeof window !== 'undefined' ? window.innerHeight : 1080}
+      width={dimensions.width}
+      height={dimensions.height}
       atmosphereColor="#1e40af"
       atmosphereAltitude={0.15}
     />
