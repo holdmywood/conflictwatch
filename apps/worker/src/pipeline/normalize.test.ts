@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parseEventRow, parseMentionRow, buildTitle } from './normalize.js'
+import { parseEventRow, parseMentionRow, buildTitle, joinEventsAndMentions } from './normalize.js'
+import type { EventRow, MentionRow } from './normalize.js'
 
 // Step 6.0 verified: 61-column layout (SOURCEURL at index 60, 0-based)
 // ActionGeo block includes ADM2Code at index 55, shifting Lat to 56, Long to 57.
@@ -141,5 +142,74 @@ describe('buildTitle', () => {
   it('omits actor2 when empty', () => {
     const title = buildTitle('RUSSIA', '', 'armed-conflict', 'Kharkiv, Ukraine')
     expect(title).toBe('Russia: armed-conflict in Kharkiv, Ukraine')
+  })
+})
+
+describe('joinEventsAndMentions', () => {
+  const baseEvent: EventRow = {
+    globalEventId: 'EVT001',
+    lat: 49.988,
+    lng: 36.232,
+    countryCode: 'UP',
+    region: 'Kharkiv, Ukraine',
+    actor1Name: 'RUSSIA',
+    actor2Name: 'UKRAINE',
+    eventCode: '190',
+    eventRootCode: '19',
+    quadClass: '4',
+    goldsteinScale: -10,
+    avgTone: -4.5,
+    publishedAt: new Date('2024-06-01T12:00:00Z'),
+  }
+
+  const baseMention: MentionRow = {
+    globalEventId: 'EVT001',
+    sourceName: 'Reuters',
+    url: 'https://reuters.com/world/ukraine-attack',
+    publishedAt: new Date('2024-06-01T12:15:00Z'),
+  }
+
+  it('a mention matched to an event produces one NormalizedEvent with the right fields', () => {
+    const results = joinEventsAndMentions([baseEvent], [baseMention])
+    expect(results).toHaveLength(1)
+    const r = results[0]
+    expect(r.globalEventId).toBe('EVT001')
+    expect(r.url).toBe('https://reuters.com/world/ukraine-attack')
+    expect(r.sourceName).toBe('Reuters')
+    expect(r.lat).toBeCloseTo(49.988)
+    expect(r.lng).toBeCloseTo(36.232)
+    expect(r.countryCode).toBe('UP')
+    expect(r.region).toBe('Kharkiv, Ukraine')
+    expect(r.actor1Name).toBe('RUSSIA')
+    expect(r.actor2Name).toBe('UKRAINE')
+    expect(r.eventCode).toBe('190')
+    expect(r.eventRootCode).toBe('19')
+    expect(r.quadClass).toBe('4')
+    expect(r.goldsteinScale).toBe(-10)
+    expect(r.avgTone).toBe(-4.5)
+  })
+
+  it('two mentions for the same event produce two NormalizedEvents', () => {
+    const mention2: MentionRow = {
+      globalEventId: 'EVT001',
+      sourceName: 'BBC',
+      url: 'https://bbc.com/news/ukraine',
+      publishedAt: new Date('2024-06-01T13:00:00Z'),
+    }
+    const results = joinEventsAndMentions([baseEvent], [baseMention, mention2])
+    expect(results).toHaveLength(2)
+    expect(results[0].sourceName).toBe('Reuters')
+    expect(results[1].sourceName).toBe('BBC')
+  })
+
+  it('a mention with no matching event is skipped', () => {
+    const orphanMention: MentionRow = {
+      globalEventId: 'NO_SUCH_EVENT',
+      sourceName: 'Reuters',
+      url: 'https://reuters.com/unmatched',
+      publishedAt: new Date('2024-06-01T12:15:00Z'),
+    }
+    const results = joinEventsAndMentions([baseEvent], [orphanMention])
+    expect(results).toHaveLength(0)
   })
 })
