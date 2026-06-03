@@ -3,10 +3,11 @@ import type { NormalizedEvent } from '../types.js'
 
 const mockUpsert = vi.fn().mockResolvedValue({ id: 'event-cuid-1' })
 const mockCreate = vi.fn().mockResolvedValue({})
+const mockFindUnique = vi.fn().mockResolvedValue(null)
 
 vi.mock('@conflictwatch/db', () => ({
   prisma: {
-    conflict: { upsert: mockUpsert },
+    conflict: { upsert: mockUpsert, findUnique: mockFindUnique },
     event: { upsert: mockUpsert },
     eventSource: { create: mockCreate },
     heartbeat: { upsert: mockUpsert },
@@ -37,6 +38,7 @@ describe('persistEvent', () => {
   beforeEach(() => {
     mockUpsert.mockReset().mockResolvedValue({ id: 'event-cuid-1' })
     mockCreate.mockReset().mockResolvedValue({})
+    mockFindUnique.mockReset().mockResolvedValue(null)
   })
 
   it('upserts a Conflict record keyed by countryCode', async () => {
@@ -55,6 +57,31 @@ describe('persistEvent', () => {
         where: { clusterId: '1234567890' },
       })
     )
+  })
+
+  it('returns threatLevelJumped=false when no existing conflict', async () => {
+    mockFindUnique.mockResolvedValue(null)
+    const result = await persistEvent(sampleEvent, ['Reuters'])
+    expect(result.threatLevelJumped).toBe(false)
+  })
+
+  it('returns threatLevelJumped=false when threat change is <2', async () => {
+    // sampleEvent quadClass '4' → threatLevel 5; existing is 4 — diff is 1
+    mockFindUnique.mockResolvedValue({ threatLevel: 4 })
+    const result = await persistEvent(sampleEvent, ['Reuters'])
+    expect(result.threatLevelJumped).toBe(false)
+  })
+
+  it('returns threatLevelJumped=true when threat change is ≥2', async () => {
+    // sampleEvent quadClass '4' → threatLevel 5; existing is 2 — diff is 3
+    mockFindUnique.mockResolvedValue({ threatLevel: 2 })
+    const result = await persistEvent(sampleEvent, ['Reuters'])
+    expect(result.threatLevelJumped).toBe(true)
+  })
+
+  it('returns conflictId matching countryCode', async () => {
+    const result = await persistEvent(sampleEvent, ['Reuters'])
+    expect(result.conflictId).toBe('conflict-ua')
   })
 })
 

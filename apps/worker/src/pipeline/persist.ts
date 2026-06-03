@@ -10,12 +10,17 @@ function conflictId(countryCode: string): string {
 export async function persistEvent(
   event: NormalizedEvent,
   allSourceNamesForCluster: string[]
-): Promise<void> {
+): Promise<{ threatLevelJumped: boolean; conflictId: string }> {
   const threatLevel = scoreThreat(event.quadClass)
   const eventType = toEventType(event.eventRootCode)
   const confidence = scoreConfidence(allSourceNamesForCluster)
   const title = buildTitle(event.actor1Name, event.actor2Name, eventType, event.region)
   const cId = conflictId(event.countryCode)
+
+  const existing = await prisma.conflict.findUnique({
+    where: { id: cId },
+    select: { threatLevel: true },
+  })
 
   await prisma.conflict.upsert({
     where: { id: cId },
@@ -60,6 +65,11 @@ export async function persistEvent(
       publishedAt: event.publishedAt,
     },
   })
+
+  const threatLevelJumped =
+    existing !== null && Math.abs(existing.threatLevel - threatLevel) >= 2
+
+  return { threatLevelJumped, conflictId: cId }
 }
 
 export async function updateHeartbeat(
