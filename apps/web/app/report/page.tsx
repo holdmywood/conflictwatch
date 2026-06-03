@@ -6,6 +6,7 @@ import Link from 'next/link'
 interface ReportSection {
   id: string
   region: string
+  conflictName: string
   body: string
   confidence: string
   createdAt: string
@@ -88,7 +89,7 @@ export default function ReportPage() {
               <span className="text-xs font-mono text-amber-400 border border-amber-400 px-1.5 py-0.5 rounded">
                 AI ASSESSMENT
               </span>
-              <span className="text-xs font-mono text-gray-300">{section.region}</span>
+              <span className="text-xs font-mono text-gray-300">{section.conflictName}</span>
               <span
                 className={`text-xs font-mono border rounded px-1.5 py-0.5 ${
                   CONFIDENCE_COLORS[section.confidence] ?? CONFIDENCE_COLORS.low

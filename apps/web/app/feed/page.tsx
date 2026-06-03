@@ -16,6 +16,12 @@ export default function FeedPage() {
           <Link href="/" className="text-gray-500 hover:text-gray-200 font-mono text-xs">
             ← MAP
           </Link>
+          <Link href="/predictions" className="text-gray-500 hover:text-gray-200 font-mono text-xs">
+            PREDICTIONS
+          </Link>
+          <Link href="/report" className="text-gray-500 hover:text-gray-200 font-mono text-xs">
+            DAILY REPORT
+          </Link>
           <span className="font-mono text-sm font-bold tracking-widest text-gray-200">
             INTEL FEED
           </span>

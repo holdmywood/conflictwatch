@@ -30,5 +30,18 @@ export async function GET(request: Request) {
     orderBy: { region: 'asc' },
   })
 
-  return NextResponse.json({ reports })
+  // Enrich with conflict names
+  const conflictIds = [...new Set(reports.map(r => r.region))]
+  const conflicts = await prisma.conflict.findMany({
+    where: { id: { in: conflictIds } },
+    select: { id: true, name: true },
+  })
+  const nameById = new Map(conflicts.map(c => [c.id, c.name]))
+
+  const enriched = reports.map(r => ({
+    ...r,
+    conflictName: nameById.get(r.region) ?? r.region,
+  }))
+
+  return NextResponse.json({ reports: enriched })
 }

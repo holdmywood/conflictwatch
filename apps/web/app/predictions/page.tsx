@@ -7,6 +7,7 @@ import AssessmentCard from './components/AssessmentCard'
 interface Assessment {
   id: string
   region: string
+  conflictName: string
   body: string
   confidence: string
   createdAt: string
@@ -58,7 +59,7 @@ export default function PredictionsPage() {
           </p>
         )}
         {predictions.map(p => (
-          <AssessmentCard key={p.id} {...p} />
+          <AssessmentCard key={p.id} region={p.conflictName} body={p.body} confidence={p.confidence} createdAt={p.createdAt} usedEventIds={p.usedEventIds} />
         ))}
       </div>
     </div>

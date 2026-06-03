@@ -18,5 +18,20 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json({ predictions: [...byRegion.values()] })
+  const predictions = [...byRegion.values()]
+
+  // Enrich with conflict names
+  const conflictIds = [...new Set(predictions.map(p => p.region))]
+  const conflicts = await prisma.conflict.findMany({
+    where: { id: { in: conflictIds } },
+    select: { id: true, name: true },
+  })
+  const nameById = new Map(conflicts.map(c => [c.id, c.name]))
+
+  const enriched = predictions.map(p => ({
+    ...p,
+    conflictName: nameById.get(p.region) ?? p.region,
+  }))
+
+  return NextResponse.json({ predictions: enriched })
 }
