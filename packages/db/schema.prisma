@@ -34,6 +34,8 @@ model Event {
   conflictId  String?
   conflict    Conflict?     @relation(fields: [conflictId], references: [id])
   sources     EventSource[]
+
+  @@index([conflictId])
 }
 
 model EventSource {
@@ -43,6 +45,8 @@ model EventSource {
   url         String
   publishedAt DateTime
   event       Event    @relation(fields: [eventId], references: [id])
+
+  @@index([eventId])
 }
 
 model Assessment {
@@ -76,4 +80,6 @@ model WatchlistItem {
   userId     String
   conflictId String
   user       User   @relation(fields: [userId], references: [id])
+
+  @@unique([userId, conflictId])
 }
