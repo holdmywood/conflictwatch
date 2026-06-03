@@ -1,0 +1,16 @@
+{
+  "name": "conflictwatch",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:worker": "pnpm --filter worker dev",
+    "build": "pnpm --filter web build",
+    "db:generate": "pnpm --filter db generate",
+    "db:migrate": "pnpm --filter db migrate:dev",
+    "db:studio": "pnpm --filter db studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
