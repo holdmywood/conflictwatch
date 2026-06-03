@@ -51,6 +51,7 @@ export async function generatePrediction(
   })
 
   const body = response.content[0]?.type === 'text' ? response.content[0].text : ''
+  if (!body) return
 
   await prisma.assessment.create({
     data: {
@@ -93,6 +94,7 @@ export async function generateDailyReport(
   })
 
   const body = response.content[0]?.type === 'text' ? response.content[0].text : ''
+  if (!body) return
 
   await prisma.assessment.create({
     data: {

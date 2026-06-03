@@ -38,6 +38,8 @@ describe('generatePrediction', () => {
   beforeEach(() => {
     mockMessagesCreate.mockReset()
     mockAssessmentCreate.mockReset().mockResolvedValue({ id: 'asmt-1' })
+    mockConflictFindMany.mockReset().mockResolvedValue([])
+    mockConflictFindUnique.mockReset().mockResolvedValue(null)
     mockMessagesCreate.mockResolvedValue({
       content: [{ type: 'text', text: 'Escalation likely over the next 24 hours.' }],
     })
@@ -88,6 +90,8 @@ describe('generateDailyReport', () => {
   beforeEach(() => {
     mockMessagesCreate.mockReset()
     mockAssessmentCreate.mockReset().mockResolvedValue({ id: 'asmt-2' })
+    mockConflictFindMany.mockReset().mockResolvedValue([])
+    mockConflictFindUnique.mockReset().mockResolvedValue(null)
     mockMessagesCreate.mockResolvedValue({
       content: [{ type: 'text', text: 'Heavy fighting reported in eastern regions.' }],
     })
