@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Conflict {
+  id          String    @id
+  name        String
+  region      String
+  status      String    @default("active")
+  threatLevel Int
+  lat         Float
+  lng         Float
+  updatedAt   DateTime  @updatedAt
+  events      Event[]
+}
+
+model Event {
+  id          String        @id @default(cuid())
+  clusterId   String        @unique
+  title       String
+  summary     String        @default("")
+  eventType   String
+  lat         Float
+  lng         Float
+  region      String
+  confidence  String        @default("low")
+  publishedAt DateTime
+  ingestedAt  DateTime      @default(now())
+  conflictId  String?
+  conflict    Conflict?     @relation(fields: [conflictId], references: [id])
+  sources     EventSource[]
+}
+
+model EventSource {
+  id          String   @id @default(cuid())
+  eventId     String
+  name        String
+  url         String
+  publishedAt DateTime
+  event       Event    @relation(fields: [eventId], references: [id])
+}
+
+model Assessment {
+  id           String   @id @default(cuid())
+  region       String
+  kind         String
+  body         String
+  confidence   String
+  usedEventIds String[]
+  createdAt    DateTime @default(now())
+}
+
+model Heartbeat {
+  id             Int      @id @default(1)
+  lastIngestedAt DateTime
+  sourcesOk      Int
+  sourcesFailed  Int
+}
+
+model User {
+  id        String          @id @default(cuid())
+  email     String          @unique
+  password  String
+  tier      String          @default("free")
+  createdAt DateTime        @default(now())
+  watchlist WatchlistItem[]
+}
+
+model WatchlistItem {
+  id         String @id @default(cuid())
+  userId     String
+  conflictId String
+  user       User   @relation(fields: [userId], references: [id])
+}
