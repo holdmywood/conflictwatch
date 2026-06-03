@@ -3,6 +3,11 @@ import cron from 'node-cron'
 import { GdeltSource } from './sources/gdelt.js'
 import { isDuplicate, markSeen } from './pipeline/deduplicate.js'
 import { persistEvent, updateHeartbeat } from './pipeline/persist.js'
+import {
+  runHourlyAssessments,
+  runDailyReports,
+  triggerAssessmentForConflict,
+} from './ai/assessor.js'
 import { redis } from './lib/redis.js'
 
 const gdelt = new GdeltSource()
@@ -24,15 +29,23 @@ async function runIngestionCycle(): Promise<void> {
       clusterSources.set(event.globalEventId, names)
     }
 
+    const jumpedConflictIds = new Set<string>()
     let newCount = 0
     for (const event of events) {
       const dup = await isDuplicate(event.globalEventId, event.url)
       if (dup) continue
 
       const allSources = clusterSources.get(event.globalEventId) ?? [event.sourceName]
-      await persistEvent(event, allSources)
+      const { threatLevelJumped, conflictId } = await persistEvent(event, allSources)
       await markSeen(event.globalEventId, event.url)
       newCount++
+      if (threatLevelJumped) jumpedConflictIds.add(conflictId)
+    }
+
+    for (const cid of jumpedConflictIds) {
+      await triggerAssessmentForConflict(cid).catch(err =>
+        console.error(`[worker] threat-jump assessment failed for ${cid}:`, err)
+      )
     }
 
     sourcesOk = 1
@@ -51,12 +64,26 @@ async function main(): Promise<void> {
 
   await runIngestionCycle()
 
-  const task = cron.schedule('*/5 * * * *', runIngestionCycle)
-  console.log('[worker] cron scheduled — polling every 5 minutes')
+  const ingestionTask = cron.schedule('*/5 * * * *', runIngestionCycle)
+  const hourlyTask = cron.schedule('0 * * * *', () =>
+    runHourlyAssessments().catch(err =>
+      console.error('[worker] hourly assessment error:', err)
+    )
+  )
+  const dailyTask = cron.schedule('0 0 * * *', () =>
+    runDailyReports().catch(err =>
+      console.error('[worker] daily report error:', err)
+    )
+  )
+  console.log(
+    '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight'
+  )
 
   const shutdown = async () => {
     console.log('[worker] shutting down…')
-    task.stop()
+    ingestionTask.stop()
+    hourlyTask.stop()
+    dailyTask.stop()
     await redis.disconnect()
     process.exit(0)
   }
