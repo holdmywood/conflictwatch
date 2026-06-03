@@ -10,6 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "latest",
     "@conflictwatch/db": "workspace:*",
     "axios": "^1.7.2",
     "csv-parse": "^5.5.6",
