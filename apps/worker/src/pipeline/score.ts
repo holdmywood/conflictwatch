@@ -52,7 +52,7 @@ export function toEventType(eventRootCode: string): string {
 function canonicalSourceName(raw: string): string {
   const lower = raw.toLowerCase()
   for (const wire of WIRE_AGENCIES) {
-    if (lower.includes(wire.trim())) {
+    if (lower.includes(wire)) {
       return wire.trim().split(' ')[0]
     }
   }

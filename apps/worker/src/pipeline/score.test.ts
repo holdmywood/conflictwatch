@@ -49,4 +49,7 @@ describe('scoreConfidence', () => {
     const names = ['Reuters UK', 'Reuters India', 'Reuters US', 'BBC', 'Al Jazeera']
     expect(scoreConfidence(names)).toBe('high') // reuters=1 + bbc=1 + aljazeera=1
   })
+  it('does not collapse "Japan Times" as AP wire', () => {
+    expect(scoreConfidence(['Japan Times', 'BBC'])).toBe('medium') // 2 distinct, not collapsed to 1
+  })
 })
