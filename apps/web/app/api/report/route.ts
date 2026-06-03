@@ -15,6 +15,13 @@ export async function GET(request: Request) {
   const start = new Date(`${date}T00:00:00.000Z`)
   const end = new Date(`${date}T23:59:59.999Z`)
 
+  if (isNaN(start.getTime())) {
+    return NextResponse.json(
+      { error: 'date param required (YYYY-MM-DD)' },
+      { status: 400 }
+    )
+  }
+
   const reports = await prisma.assessment.findMany({
     where: {
       kind: 'dailyReport',
