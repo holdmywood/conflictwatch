@@ -41,7 +41,10 @@ export default function ConflictPanel({ conflictId, onClose }: ConflictPanelProp
         setDetail(data)
         setLoading(false)
       })
-      .catch(() => setLoading(false))
+      .catch(() => {
+        setDetail(null)
+        setLoading(false)
+      })
   }, [conflictId])
 
   if (!conflictId) return null
@@ -73,7 +76,7 @@ export default function ConflictPanel({ conflictId, onClose }: ConflictPanelProp
           </div>
 
           <div className="space-y-3">
-            {detail.events.map(event => (
+            {detail.events.slice(0, 5).map(event => (
               <div key={event.id} className="border border-[#1f2937] rounded p-3 space-y-2">
                 <p className="text-sm text-gray-200 leading-snug">{event.title}</p>
                 <div className="flex items-center gap-2 flex-wrap">
