@@ -6,9 +6,9 @@
     "dev:web": "pnpm --filter web dev",
     "dev:worker": "pnpm --filter worker dev",
     "build": "pnpm --filter web build",
-    "db:generate": "pnpm --filter db generate",
-    "db:migrate": "pnpm --filter db migrate:dev",
-    "db:studio": "pnpm --filter db studio"
+    "db:generate": "pnpm --filter @conflictwatch/db generate",
+    "db:migrate": "pnpm --filter @conflictwatch/db migrate:dev",
+    "db:studio": "pnpm --filter @conflictwatch/db studio"
   },
   "devDependencies": {
     "typescript": "^5.4.5"
