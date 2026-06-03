@@ -1,6 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #111827;
+  --color-border: #1f2937;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+}
 
 :root {
   --bg: #0a0f1a;
