@@ -37,7 +37,11 @@ async function runIngestionCycle(): Promise<void> {
 
       const allSources = clusterSources.get(event.globalEventId) ?? [event.sourceName]
       const { threatLevelJumped, conflictId } = await persistEvent(event, allSources)
-      await markSeen(event.globalEventId, event.url)
+      try {
+        await markSeen(event.globalEventId, event.url)
+      } catch (err) {
+        console.warn(`[worker] markSeen failed for ${event.globalEventId}:`, err)
+      }
       newCount++
       if (threatLevelJumped) jumpedConflictIds.add(conflictId)
     }
