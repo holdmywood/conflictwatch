@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { prisma } from '@conflictwatch/db'
 import { snapshotEpisode, logCalibration } from '../ai/episode-logger.js'
+import { computePEscalation } from '../ai/probability-model.js'
 
 const client = new Anthropic()
 
@@ -15,27 +16,6 @@ const MIN_EVENTS_FOR_PASS = 5
 
 // Cooldown: do not emit a new signal for the same conflict within 6 hours.
 const COOLDOWN_MS = 6 * 60 * 60 * 1000
-
-// Simple logistic probability estimate from trend features.
-// Not a calibrated model yet — returns a plausible prior that will be
-// updated once CalibrationRecord history accumulates.
-function estimatePEscalation(features: TrendFeatures): { p: number; ciLow: number; ciHigh: number } {
-  // Each feature adds evidence; these weights are conservative priors.
-  let logit = -3.5  // base: ~3% prior
-  if (features.eventTempo > 5) logit += 0.8
-  if (features.eventTempo > 10) logit += 0.6
-  if (features.severitySlope > 0.5) logit += 0.7
-  if (features.spreadLocations > 3) logit += 0.5
-  if (features.actorCount > 3) logit += 0.4
-
-  const p = 1 / (1 + Math.exp(-logit))
-  // Wide CI reflects low historical data
-  return {
-    p: Math.round(p * 100) / 100,
-    ciLow: Math.max(0, Math.round((p - 0.15) * 100) / 100),
-    ciHigh: Math.min(1, Math.round((p + 0.15) * 100) / 100),
-  }
-}
 
 export interface TrendFeatures {
   conflictId: string
@@ -175,7 +155,7 @@ export async function runEscalationPass(conflictId: string): Promise<string | nu
   const assessment = parseAssessment(text)
   if (!assessment) return null
 
-  const { p, ciLow, ciHigh } = estimatePEscalation(features)
+  const { p, ciLow, ciHigh, modelVersion } = computePEscalation(features)
   const horizonDays = 14
 
   // Snapshot episode before creating signal
@@ -210,11 +190,12 @@ export async function runEscalationPass(conflictId: string): Promise<string | nu
       ciLow,
       ciHigh,
       horizonDays,
+      modelVersion,
       episodeId,
     },
   })
 
-  await logCalibration(signal.id, p, ciLow, ciHigh, horizonDays, 'v0-logistic')
+  await logCalibration(signal.id, p, ciLow, ciHigh, horizonDays, modelVersion)
 
   return signal.id
 }
