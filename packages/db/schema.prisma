@@ -243,3 +243,23 @@ model WatchlistItem {
 
   @@unique([userId, conflictId])
 }
+
+// §A9: exposure graph — links geographic zones to market instruments
+// Versioned, curated table. Seed from packages/db/seed-exposures.ts.
+model ExposureLink {
+  id              String   @id @default(cuid())
+  zone            String   // slug: 'hormuz'|'suez'|'ukraine'|'russia'|...
+  zoneLabel       String   // display: 'Strait of Hormuz'
+  zoneType        String   // 'chokepoint'|'commodity_region'|'shipping_lane'
+  instrument      String   // slug: 'brent'|'ttf'|'wheat'|'container-freight'|...
+  instrumentLabel String   // display: 'Brent Crude'
+  assetClass      String   // 'energy'|'agriculture'|'shipping'|'metals'|'fx'|'bonds'
+  linkType        String   // 'transit'|'production'|'export'|'substitute'
+  weight          Float    // 0.0–1.0 directness (1.0 = sole transit/production route)
+  notes           String   @default("")
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+
+  @@index([zone])
+  @@index([instrument])
+}
