@@ -13,6 +13,7 @@ import {
 } from './ai/assessor.js'
 import { matchOrCreateSituation } from './pipeline/cluster.js'
 import { runAllEscalationPasses } from './pipeline/escalation.js'
+import { resolveOutcomes } from './ai/episode-logger.js'
 import type { NormalizedEvent } from './types.js'
 
 const gdelt = new GdeltSource()
@@ -167,9 +168,11 @@ async function main(): Promise<void> {
       .catch(err => console.error('[worker] hourly assessment error:', err))
   )
   const dailyTask = cron.schedule('0 0 * * *', () =>
-    runDailyReports().catch(err =>
-      console.error('[worker] daily report error:', err)
-    )
+    runDailyReports()
+      .then(() => resolveOutcomes())
+      .catch(err =>
+        console.error('[worker] outcome resolution error:', err)
+      )
   )
   console.log(
     '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight'
