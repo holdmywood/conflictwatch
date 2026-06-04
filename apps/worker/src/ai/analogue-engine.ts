@@ -1,19 +1,13 @@
-import { prisma } from '@conflictwatch/db'
+import { prisma, analogueDistance, type AnalogueFeatures } from '@conflictwatch/db'
 
-export interface AnalogueFeatures {
-  eventTempo: number
-  severitySlope: number
-  spreadLocations: number
-  sourceBreadth: number
-  actorCount: number
-}
+export type { AnalogueFeatures }
 
 export interface Analogue {
   episodeId: string
   conflictId: string
   snapshotAt: Date
   distance: number          // 0 = identical, higher = more different
-  escalatedToNational: boolean
+  escalatedToNational: boolean | null
   horizonDays: number | null
   assetMovesJson: unknown   // raw from DB
 }
@@ -23,25 +17,6 @@ export interface AnalogueResult {
   baseRate: number          // fraction that escalated among top-N
   dispersion: number        // std dev of escalation rate within top-N
   totalCandidates: number   // episodes in the search pool
-}
-
-// Feature scaling factors — normalize each dimension to [0,1] range
-// based on expected operational ranges. Keeps distance metric balanced.
-const SCALE: Record<keyof AnalogueFeatures, number> = {
-  eventTempo: 1 / 20,
-  severitySlope: 1 / 5,
-  spreadLocations: 1 / 20,
-  sourceBreadth: 1 / 10,
-  actorCount: 1 / 20,
-}
-
-function euclideanDistance(a: AnalogueFeatures, b: AnalogueFeatures): number {
-  return Math.sqrt(
-    Object.keys(SCALE).reduce((sum, key) => {
-      const k = key as keyof AnalogueFeatures
-      return sum + Math.pow((a[k] - b[k]) * SCALE[k], 2)
-    }, 0)
-  )
 }
 
 // Find the N most similar historical episodes to the given feature vector.
@@ -82,14 +57,14 @@ export async function findAnalogues(
     episodeId: ep.id,
     conflictId: ep.conflictId,
     snapshotAt: ep.snapshotAt,
-    distance: euclideanDistance(features, {
+    distance: analogueDistance(features, {
       eventTempo: ep.eventTempo,
       severitySlope: ep.severitySlope,
       spreadLocations: ep.spreadLocations,
       sourceBreadth: ep.sourceBreadth,
       actorCount: ep.actorCount,
     }),
-    escalatedToNational: ep.escalatedToNational ?? false,
+    escalatedToNational: ep.escalatedToNational,
     horizonDays: ep.escalationHorizonDays,
     assetMovesJson: ep.assetMovesJson,
   }))

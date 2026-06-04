@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockEpisodeFindMany = vi.fn()
 
-vi.mock('@conflictwatch/db', () => ({
-  prisma: {
-    episodeStore: { findMany: mockEpisodeFindMany },
-  },
-}))
+vi.mock('@conflictwatch/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@conflictwatch/db')>()
+  return {
+    ...actual,
+    prisma: {
+      episodeStore: { findMany: mockEpisodeFindMany },
+    },
+  }
+})
 
 const { findAnalogues } = await import('./analogue-engine.js')
 

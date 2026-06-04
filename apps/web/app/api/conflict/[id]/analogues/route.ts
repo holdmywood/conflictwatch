@@ -1,19 +1,5 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@conflictwatch/db'
-
-interface EpisodeFeatures {
-  eventTempo: number; severitySlope: number; spreadLocations: number;
-  sourceBreadth: number; actorCount: number;
-}
-
-const SCALE = { eventTempo: 1/20, severitySlope: 1/5, spreadLocations: 1/20, sourceBreadth: 1/10, actorCount: 1/20 }
-
-function distance(a: EpisodeFeatures, b: EpisodeFeatures): number {
-  return Math.sqrt(Object.keys(SCALE).reduce((s, k) => {
-    const key = k as keyof EpisodeFeatures
-    return s + Math.pow((a[key] - b[key]) * (SCALE as Record<string, number>)[k], 2)
-  }, 0))
-}
+import { prisma, analogueDistance, type AnalogueFeatures } from '@conflictwatch/db'
 
 export async function GET(
   req: Request,
@@ -39,7 +25,7 @@ export async function GET(
     return NextResponse.json({ analogues: [], baseRate: 0, dispersion: 0, totalCandidates: 0, asOfDate })
   }
 
-  const query: EpisodeFeatures = {
+  const query: AnalogueFeatures = {
     eventTempo: currentEpisode.eventTempo,
     severitySlope: currentEpisode.severitySlope,
     spreadLocations: currentEpisode.spreadLocations,
@@ -59,7 +45,7 @@ export async function GET(
   })
 
   const scored = candidates
-    .map(ep => ({ ...ep, distance: distance(query, ep as EpisodeFeatures) }))
+    .map(ep => ({ ...ep, distance: analogueDistance(query, ep as AnalogueFeatures) }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, topN)
 
