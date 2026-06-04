@@ -262,4 +262,5 @@ model ExposureLink {
 
   @@index([zone])
   @@index([instrument])
+  @@unique([zone, instrument])
 }

@@ -1,33 +1,5 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@conflictwatch/db'
-
-// Keyword → zone slug mapping (mirrors exposure-matcher.ts in worker)
-const REGION_ZONE_MAP: Array<{ keywords: string[]; zone: string }> = [
-  { keywords: ['hormuz', 'gulf', 'iran', 'iraq', 'bahrain', 'kuwait', 'abu dhabi', 'qatar', 'oman', 'persian'], zone: 'hormuz' },
-  { keywords: ['bab el mandeb', 'bab-el-mandeb', 'yemen', 'houthi', 'red sea', 'aden', 'djibouti', 'eritrea', 'somalia'], zone: 'bab-el-mandeb' },
-  { keywords: ['suez', 'egypt', 'sinai', 'north africa'], zone: 'suez' },
-  { keywords: ['bosphorus', 'dardanelles', 'turkey', 'türkiye', 'istanbul', 'ankara', 'black sea'], zone: 'bosphorus' },
-  { keywords: ['panama', 'central america'], zone: 'panama' },
-  { keywords: ['malacca', 'singapore', 'malaysia', 'indonesia', 'straits'], zone: 'malacca' },
-  { keywords: ['ukraine', 'kyiv', 'kharkiv', 'odesa', 'zaporizhzhia', 'donetsk', 'luhansk', 'kherson', 'dnipro'], zone: 'ukraine' },
-  { keywords: ['russia', 'moscow', 'siberia', 'chechnya', 'dagestan', 'kaliningrad', 'murmansk', 'vladivostok'], zone: 'russia' },
-  { keywords: ['taiwan', 'south china sea', 'spratly', 'paracel', 'strait of taiwan'], zone: 'south-china-sea' },
-  { keywords: ['congo', 'drc', 'kinshasa', 'bukavu', 'goma', 'ituri', 'kivus'], zone: 'drc' },
-  { keywords: ['mali', 'niger', 'burkina', 'mauritania', 'sahel', 'bamako', 'niamey', 'ouagadougou'], zone: 'sahel' },
-  { keywords: ['nigeria', 'niger delta', 'port harcourt', 'warri', 'west africa', 'ghana', 'ivory coast', 'sierra leone', 'liberia', 'guinea'], zone: 'west-africa' },
-  { keywords: ['saudi', 'riyadh', 'jeddah', 'gulf states', 'uae', 'dubai', 'middle east'], zone: 'middle-east' },
-  { keywords: ['venezuela', 'caracas', 'maracaibo', 'orinoco'], zone: 'venezuela' },
-  { keywords: ['sudan', 'south sudan', 'khartoum', 'juba', 'darfur'], zone: 'sudan' },
-]
-
-function inferZones(region: string, chokepoints: string[]): string[] {
-  const lower = region.toLowerCase()
-  const zones = new Set<string>(chokepoints)
-  for (const { keywords, zone } of REGION_ZONE_MAP) {
-    if (keywords.some(kw => lower.includes(kw))) zones.add(zone)
-  }
-  return [...zones]
-}
+import { prisma, inferZonesFromRegion } from '@conflictwatch/db'
 
 export async function GET(
   _req: Request,
@@ -49,7 +21,7 @@ export async function GET(
   })
   const chokepoints = latestEpisode?.chokepoints ?? []
 
-  const zones = inferZones(conflict.region, chokepoints)
+  const zones = inferZonesFromRegion(conflict.region, chokepoints)
   if (zones.length === 0) {
     return NextResponse.json({ exposures: [], zones: [] })
   }

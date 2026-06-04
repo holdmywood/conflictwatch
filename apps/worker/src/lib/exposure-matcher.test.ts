@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('@conflictwatch/db', () => ({
-  prisma: { exposureLink: { findMany: vi.fn().mockResolvedValue([]) } },
-}))
+vi.mock('@conflictwatch/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@conflictwatch/db')>()
+  return {
+    ...actual,
+    prisma: { exposureLink: { findMany: vi.fn().mockResolvedValue([]) } },
+  }
+})
 
 const { inferZonesFromRegion } = await import('./exposure-matcher.js')
 
