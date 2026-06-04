@@ -4,6 +4,7 @@ const mockMessagesCreate = vi.fn()
 const mockAssessmentCreate = vi.fn().mockResolvedValue({ id: 'asmt-1' })
 const mockConflictFindMany = vi.fn().mockResolvedValue([])
 const mockConflictFindUnique = vi.fn().mockResolvedValue(null)
+const mockConflictUpdate = vi.fn().mockResolvedValue({})
 
 vi.mock('@anthropic-ai/sdk', () => ({
   default: vi.fn().mockImplementation(() => ({
@@ -17,11 +18,12 @@ vi.mock('@conflictwatch/db', () => ({
     conflict: {
       findMany: mockConflictFindMany,
       findUnique: mockConflictFindUnique,
+      update: mockConflictUpdate,
     },
   },
 }))
 
-const { generatePrediction, generateDailyReport } = await import('./assessor.js')
+const { generatePrediction, generateDailyReport, generateSituationLine } = await import('./assessor.js')
 
 const sampleEvents = [
   {
@@ -114,5 +116,55 @@ describe('generateDailyReport', () => {
     await generateDailyReport('conflict-ua', 'Ukraine', new Date(), [])
     expect(mockMessagesCreate).not.toHaveBeenCalled()
     expect(mockAssessmentCreate).not.toHaveBeenCalled()
+  })
+})
+
+describe('generateSituationLine', () => {
+  beforeEach(() => {
+    mockMessagesCreate.mockReset()
+    mockConflictUpdate.mockReset().mockResolvedValue({})
+    mockMessagesCreate.mockResolvedValue({
+      content: [{ type: 'text', text: 'Heavy artillery exchanges continue along the eastern front.' }],
+    })
+  })
+
+  it('updates Conflict.currentSituationLine with Haiku response', async () => {
+    await generateSituationLine('conflict-ua', 'Ukraine', sampleEvents)
+    expect(mockConflictUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'conflict-ua' },
+        data: expect.objectContaining({
+          currentSituationLine: 'Heavy artillery exchanges continue along the eastern front.',
+        }),
+      })
+    )
+  })
+
+  it('uses claude-haiku-4-5-20251001 model (cost gate)', async () => {
+    await generateSituationLine('conflict-ua', 'Ukraine', sampleEvents)
+    expect(mockMessagesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-haiku-4-5-20251001' })
+    )
+  })
+
+  it('does not call Claude when events array is empty', async () => {
+    await generateSituationLine('conflict-ua', 'Ukraine', [])
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+    expect(mockConflictUpdate).not.toHaveBeenCalled()
+  })
+
+  it('truncates line to 200 characters', async () => {
+    const longLine = 'A'.repeat(250)
+    mockMessagesCreate.mockResolvedValue({
+      content: [{ type: 'text', text: longLine }],
+    })
+    await generateSituationLine('conflict-ua', 'Ukraine', sampleEvents)
+    expect(mockConflictUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          currentSituationLine: expect.stringMatching(/^A{200}$/),
+        }),
+      })
+    )
   })
 })

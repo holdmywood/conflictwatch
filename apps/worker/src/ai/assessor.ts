@@ -107,6 +107,39 @@ export async function generateDailyReport(
   })
 }
 
+// Single-sentence situation line for a country — uses Haiku to keep cost low.
+// Updates Conflict.currentSituationLine directly. Max 200 chars.
+export async function generateSituationLine(
+  conflictId: string,
+  conflictName: string,
+  events: EventSummary[],
+): Promise<void> {
+  if (events.length === 0) return
+
+  const userPrompt =
+    `In ONE sentence (max 200 characters), describe the current conflict situation in ${conflictName} ` +
+    `based on these recent events:\n` +
+    events.slice(0, 10).map(e => `- ${e.title}`).join('\n') +
+    `\n\nRespond with ONLY the sentence. No punctuation at the end beyond a period.`
+
+  const response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 100,
+    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } as const }],
+    messages: [{ role: 'user', content: userPrompt }],
+  })
+
+  const raw = response.content[0]?.type === 'text' ? response.content[0].text : ''
+  if (!raw) return
+
+  const line = raw.slice(0, 200)
+
+  await prisma.conflict.update({
+    where: { id: conflictId },
+    data: { currentSituationLine: line },
+  })
+}
+
 export async function runHourlyAssessments(): Promise<void> {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000)
   const conflicts = await prisma.conflict.findMany({
@@ -128,6 +161,7 @@ export async function runHourlyAssessments(): Promise<void> {
   for (const conflict of conflicts) {
     if (conflict.events.length === 0) continue
     await generatePrediction(conflict.id, conflict.name, conflict.events)
+    await generateSituationLine(conflict.id, conflict.name, conflict.events)
   }
 }
 
@@ -177,4 +211,5 @@ export async function triggerAssessmentForConflict(conflictId: string): Promise<
   })
   if (!conflict || conflict.events.length === 0) return
   await generatePrediction(conflict.id, conflict.name, conflict.events)
+  await generateSituationLine(conflict.id, conflict.name, conflict.events)
 }
