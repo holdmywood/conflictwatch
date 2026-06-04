@@ -14,6 +14,7 @@ import {
 import { matchOrCreateSituation } from './pipeline/cluster.js'
 import { runAllEscalationPasses } from './pipeline/escalation.js'
 import { resolveOutcomes } from './ai/episode-logger.js'
+import { evaluateWatchlistRules } from './jobs/evaluateWatchlistRules.js'
 import type { NormalizedEvent } from './types.js'
 
 const gdelt = new GdeltSource()
@@ -174,6 +175,11 @@ async function main(): Promise<void> {
         console.error('[worker] outcome resolution error:', err)
       )
   )
+  const watchlistTask = cron.schedule('*/15 * * * *', () =>
+    evaluateWatchlistRules().catch(err =>
+      console.error('[worker] watchlist evaluation error:', err)
+    )
+  )
   console.log(
     '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight'
   )
@@ -183,6 +189,7 @@ async function main(): Promise<void> {
     ingestionTask.stop()
     hourlyTask.stop()
     dailyTask.stop()
+    watchlistTask.stop()
     process.exit(0)
   }
 

@@ -235,6 +235,7 @@ model User {
   tier      String          @default("free")
   createdAt DateTime        @default(now())
   watchlist WatchlistItem[]
+  watchlistRules WatchlistRule[]
 }
 
 model WatchlistItem {
@@ -265,4 +266,49 @@ model ExposureLink {
   @@index([zone])
   @@index([instrument])
   @@unique([zone, instrument])
+}
+
+// §A6: threshold-based watchlist rules
+// Defines what to watch and at what threshold. A rule fires when its condition
+// is met and has not already fired within dedupWindowHours.
+model WatchlistRule {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id])
+  name             String    // human label e.g. "Oil chokepoints > 25%"
+  // Trigger condition (all fields are AND-ed)
+  zoneFilter       String[]  // ExposureLink zones to match; empty = any zone
+  minPEscalation   Float?    // minimum pEscalation (0–1) to fire
+  minSurpriseScore Float?    // minimum surpriseScore on events
+  minThreatLevel   Int?      // minimum conflict threatLevel
+  // Delivery
+  webhookUrl       String?   // HTTPS endpoint for webhook delivery
+  slackWebhookUrl  String?   // Slack incoming webhook URL
+  // Deduplication
+  dedupWindowHours Int       @default(24) // don't re-fire for same conflict within N hours
+  enabled          Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  alerts           Alert[]
+
+  @@index([userId])
+}
+
+// §A6: fired alert records
+model Alert {
+  id            String       @id @default(cuid())
+  ruleId        String
+  rule          WatchlistRule @relation(fields: [ruleId], references: [id])
+  conflictId    String
+  // Snapshot of what triggered the alert
+  pEscalation   Float?
+  surpriseScore Float?
+  threatLevel   Int?
+  payload       Json         // full provenance payload delivered to webhook/Slack
+  deliveredAt   DateTime?    // null = pending/failed
+  deliveryError String?      // last error if delivery failed
+  createdAt     DateTime     @default(now())
+
+  @@index([ruleId])
+  @@index([conflictId])
+  @@index([createdAt])
 }
