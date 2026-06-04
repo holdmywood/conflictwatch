@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Event" ADD COLUMN     "surpriseScore" DOUBLE PRECISION NOT NULL DEFAULT 0;

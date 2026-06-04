@@ -75,6 +75,8 @@ model Event {
   // §A5: latency tracking
   firstReportAt      DateTime?
   signalAt           DateTime?
+  // §12: surprise/coverage-gap scoring
+  surpriseScore      Float     @default(0)
 
   @@index([conflictId])
   @@index([classified])

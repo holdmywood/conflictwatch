@@ -1,6 +1,7 @@
 import { prisma } from '@conflictwatch/db'
 import { toEventType, scoreConfidence } from './score.js'
 import { buildTitle } from './normalize.js'
+import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
 import type { ClassifyResult } from '../ai/enricher.js'
 
@@ -99,6 +100,10 @@ export async function persistEvent(
     },
   })
 
+  const distinctDomainCount = new Set(allSourceNamesForCluster).size
+  const surpriseScore = computeCoverageGapScore(classify.severity, distinctDomainCount)
+  const now = new Date()
+
   const eventRecord = await prisma.event.upsert({
     where: { clusterId: event.globalEventId },
     create: {
@@ -121,7 +126,10 @@ export async function persistEvent(
       sourceTier: event.sourceTier,
       locationConfidence: classify.location_confidence,
       classified: true,
+      // §12 / §A5: set only on first classification
       firstReportAt: event.publishedAt,
+      signalAt: now,
+      surpriseScore,
     },
     update: {
       title,
