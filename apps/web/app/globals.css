@@ -3,22 +3,50 @@
 @theme {
   --color-surface: #111827;
   --color-border: #1f2937;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", "Courier New", monospace;
 }
 
 :root {
-  --bg: #0a0f1a;
-  --surface: #111827;
-  --border: #1f2937;
-  --text: #e5e7eb;
-  --text-muted: #6b7280;
-  --accent-green: #22c55e;
+  /* ── Base surface ──────────────────────────────────── */
+  --bg:          #07090f;
+  --surface:     #0e1117;
+  --surface-2:   #161b24;
+  --border:      #1e2533;
+  --border-2:    #2a3347;
+
+  /* ── Text ──────────────────────────────────────────── */
+  --text:        #e2e8f0;
+  --text-muted:  #64748b;
+  --text-dim:    #334155;
+
+  /* ── Severity channel (colorblind-safe: amber→orange→violet scale) ── */
+  /* Uses amber/orange/violet — avoids red/green as sole distinguishers */
+  --sev-1: #64748b;   /* minimal  — slate      */
+  --sev-2: #ca8a04;   /* low      — amber      */
+  --sev-3: #ea580c;   /* medium   — orange     */
+  --sev-4: #7c3aed;   /* elevated — violet     */
+  --sev-5: #991b1b;   /* critical — deep red (paired with weight/icon, not sole cue) */
+
+  /* ── Forecast channel (blue register — distinct from severity) ── */
+  --forecast-low:      #475569;   /* < 20%   */
+  --forecast-mid:      #1d4ed8;   /* 20–50%  */
+  --forecast-elevated: #4f46e5;   /* 50–75%  */
+  --forecast-high:     #312e81;   /* > 75%   */
+
+  /* ── Accent (AI label, unchanged amber) ── */
   --accent-amber: #f59e0b;
-  --accent-red: #ef4444;
+
+  /* ── Remove --accent-red; it is replaced by severity tokens above ── */
 }
 
 body {
   background-color: var(--bg);
   color: var(--text);
   font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Tabular numerics: all numbers in mono, aligned */
+.tabnum {
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
 }
