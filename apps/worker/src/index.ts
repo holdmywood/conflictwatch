@@ -12,6 +12,7 @@ import {
   triggerAssessmentForConflict,
 } from './ai/assessor.js'
 import { matchOrCreateSituation } from './pipeline/cluster.js'
+import { runAllEscalationPasses } from './pipeline/escalation.js'
 import type { NormalizedEvent } from './types.js'
 
 const gdelt = new GdeltSource()
@@ -161,9 +162,9 @@ async function main(): Promise<void> {
 
   const ingestionTask = cron.schedule('*/5 * * * *', runIngestionCycle)
   const hourlyTask = cron.schedule('0 * * * *', () =>
-    runHourlyAssessments().catch(err =>
-      console.error('[worker] hourly assessment error:', err)
-    )
+    runHourlyAssessments()
+      .then(() => runAllEscalationPasses())
+      .catch(err => console.error('[worker] hourly assessment error:', err))
   )
   const dailyTask = cron.schedule('0 0 * * *', () =>
     runDailyReports().catch(err =>
