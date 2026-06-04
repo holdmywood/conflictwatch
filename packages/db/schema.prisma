@@ -17,6 +17,33 @@ model Conflict {
   lng         Float
   updatedAt   DateTime  @updatedAt
   events      Event[]
+  situations  Situation[]
+  // §5: present-state synthesis
+  situationStatus      String @default("")
+  currentSituationLine String @default("")
+}
+
+// §3: multi-day developing-story clustering
+// Groups related events into a story thread over a 7-day window.
+// Events match a situation when they share conflictId + region and overlapping actors/CAMEO root.
+model Situation {
+  id          String   @id @default(cuid())
+  conflictId  String
+  conflict    Conflict @relation(fields: [conflictId], references: [id])
+  title       String
+  status      String   @default("emerging") // emerging|escalating|ongoing|de-escalating|resolved
+  location    String
+  actors      String[]
+  cameoRoots  String[]
+  eventIds    String[]
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([conflictId])
+  @@index([status])
+  @@index([lastSeenAt])
 }
 
 model Event {
@@ -24,6 +51,8 @@ model Event {
   clusterId   String        @unique
   title       String
   summary     String        @default("")
+  actor1      String?
+  actor2      String?
   eventType   String
   lat         Float
   lng         Float
@@ -34,8 +63,21 @@ model Event {
   conflictId  String?
   conflict    Conflict?     @relation(fields: [conflictId], references: [id])
   sources     EventSource[]
+  // §2: AI classification fields
+  severity           Int      @default(1)
+  significance       String   @default("")
+  category           String   @default("")
+  stabilityImpact    String   @default("")
+  sourceTier         String   @default("")
+  locationConfidence String   @default("medium")
+  classified         Boolean  @default(false)
+  summarized         Boolean  @default(false)
+  // §A5: latency tracking
+  firstReportAt      DateTime?
+  signalAt           DateTime?
 
   @@index([conflictId])
+  @@index([classified])
 }
 
 model EventSource {
@@ -46,6 +88,7 @@ model EventSource {
   publishedAt DateTime
   event       Event    @relation(fields: [eventId], references: [id])
 
+  @@unique([eventId, url])
   @@index([eventId])
 }
 
@@ -59,11 +102,128 @@ model Assessment {
   createdAt    DateTime @default(now())
 }
 
+// §6: escalation / early-warning signals
+// Supersedes Assessment(kind='prediction') for forward-looking signals.
+model EscalationSignal {
+  id              String    @id @default(cuid())
+  scope           String    // 'country' | 'actor'
+  targetId        String    // conflictId or actor name
+  // LLM-assessed fields
+  escalationRisk  String    @default("none") // 'none'|'watch'|'elevated'|'high'
+  trajectory      String    @default("stable")
+  drivers         String[]
+  actorsOfConcern String[]
+  horizon         String    @default("")
+  rationale       String    @default("")
+  confidence      String    @default("low")
+  usedEventIds    String[]
+  triggeringFeatures Json   @default("{}")
+  // §A1: calibrated probability (set by model, not LLM)
+  pEscalation     Float?    // 0–1, P(national-level escalation within horizonDays)
+  ciLow           Float?
+  ciHigh          Float?
+  horizonDays     Int?
+  modelVersion    String    @default("v0")
+  // Outcome recording (filled on resolution for calibration)
+  resolvedOutcome Boolean?
+  resolvedAt      DateTime?
+  // §A8: link to point-in-time episode
+  episodeId       String?
+  episode         EpisodeStore?      @relation(fields: [episodeId], references: [id])
+  calibrations    CalibrationRecord[]
+  computedAt      DateTime  @default(now())
+  supersededAt    DateTime? // set when a newer signal for same targetId replaces this
+
+  @@index([targetId])
+  @@index([computedAt])
+  @@index([escalationRisk])
+}
+
+// §A1 / §A2 / §A8: point-in-time episode store
+// Stores ONLY features knowable at signal time. Outcomes filled retrospectively
+// using as-reported (never later-revised) data. Backs calibration + analogue engine.
+model EpisodeStore {
+  id               String    @id @default(cuid())
+  conflictId       String
+  // Snapshot metadata
+  snapshotAt       DateTime  // exact moment these features were recorded
+  // Numeric trend features (point-in-time)
+  eventTempo       Float     @default(0)  // events/day in trailing window
+  severitySlope    Float     @default(0)  // Δavg-severity over window (+ = rising)
+  spreadLocations  Int       @default(0)  // distinct location count in window
+  sourceBreadth    Int       @default(0)  // independent tier1/tier2 source count
+  actorCount       Int       @default(0)  // distinct named actors in window
+  // Categorical tags for similarity filtering
+  geographyClass   String    @default("") // 'chokepoint-adj'|'landlocked'|'coastal'|'island'
+  actorTypes       String[]              // 'state'|'insurgent'|'militia'|'criminal'
+  chokepoints      String[]              // e.g. ['hormuz','bab-el-mandeb']
+  commodityTags    String[]              // e.g. ['oil','grain','shipping']
+  // As-reported outcomes (filled retrospectively — never hindsight-revised)
+  escalatedToNational   Boolean?
+  escalationHorizonDays Int?
+  assetMovesJson        Json?   // {instrument: {d5: float, d10: float, d20: float}}
+  // Traceability
+  usedEventIds     String[]
+  modelVersion     String    @default("v0")
+  // Relations
+  signals          EscalationSignal[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([conflictId])
+  @@index([snapshotAt])
+}
+
+// §A1: per-signal calibration log
+// Every probabilistic call is recorded here so a Brier score and reliability
+// curve can be computed as outcomes accumulate — retroactive logging is impossible.
+model CalibrationRecord {
+  id            String    @id @default(cuid())
+  signalId      String
+  pEscalation   Float
+  ciLow         Float
+  ciHigh        Float
+  horizonDays   Int
+  modelVersion  String
+  // Outcome (filled when resolvedAt reaches horizonDays past computedAt)
+  resolvedAt    DateTime?
+  actualOutcome Boolean?  // true = escalated to national level
+  brierScore    Float?    // (p − outcome)² — lower is better
+  computedAt    DateTime  @default(now())
+
+  signal EscalationSignal @relation(fields: [signalId], references: [id])
+
+  @@index([signalId])
+  @@index([computedAt])
+  @@index([resolvedAt])
+}
+
+// §B: source-credibility framework
+// Per-domain editorial credibility, updated continuously.
+// Tier assignment reflects standards (with corrections policy, bylines, etc.),
+// NOT nationality. Credible regional papers of record can reach tier1.
+model DomainReliability {
+  domain             String   @id
+  tier               String   // 'tier1'|'tier2'|'specialist'|'blocked'|'review'
+  reliabilityScore   Float    @default(1.0) // 1.0 = full trust; decays on corrections/contradictions
+  correctionsCount   Int      @default(0)
+  contradictionCount Int      @default(0)
+  totalUsageCount    Int      @default(0)
+  reviewNotes        String   @default("")
+  lastUpdatedAt      DateTime @default(now())
+
+  @@index([tier])
+}
+
 model Heartbeat {
-  id             Int      @id @default(1)
-  lastIngestedAt DateTime
-  sourcesOk      Int
-  sourcesFailed  Int
+  id              Int      @id @default(1)
+  lastIngestedAt  DateTime
+  sourcesOk       Int
+  sourcesFailed   Int
+  // §A9: cost/volume telemetry
+  classifyCalls   Int      @default(0)
+  escalationCalls Int      @default(0)
+  summaryCalls    Int      @default(0)
 }
 
 model User {

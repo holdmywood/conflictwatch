@@ -1,7 +1,58 @@
 import { prisma } from '@conflictwatch/db'
-import { scoreThreat, toEventType, scoreConfidence } from './score.js'
+import { toEventType, scoreConfidence } from './score.js'
 import { buildTitle } from './normalize.js'
 import type { NormalizedEvent } from '../types.js'
+import type { ClassifyResult } from '../ai/enricher.js'
+
+// Trailing window for threat aggregation (7 days).
+const THREAT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+// Minimum corroborated (medium/high confidence, locationConfidence != low) events
+// at each cumulative level to reach that threat score.
+//   5/5 = 15+ corroborated high-severity events (sustained armed conflict)
+//   4/5 = 5+  repeated serious incidents
+//   3/5 = 3+  corroborated pattern
+//   2/5 = 2+  isolated corroborated event
+const MIN_EVENTS: Partial<Record<number, number>> = { 5: 15, 4: 5, 3: 3, 2: 2 }
+
+// Cumulative threat aggregation over AI severity scores (1–5).
+// Uses event.severity (from AI classify) directly — no CAMEO mapping.
+// Only medium/high confidence events with non-low locationConfidence count.
+async function computeConflictThreat(cId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - THREAT_WINDOW_MS)
+  const events = await prisma.event.findMany({
+    where: {
+      conflictId: cId,
+      publishedAt: { gte: cutoff },
+      confidence: { in: ['medium', 'high'] },
+      locationConfidence: { not: 'low' },
+      classified: true,
+    },
+    select: { severity: true },
+  })
+
+  const counts = new Map<number, number>()
+  for (const e of events) {
+    const s = e.severity
+    counts.set(s, (counts.get(s) ?? 0) + 1)
+  }
+
+  // Build cumulative counts: an event at severity S contributes to all levels ≤ S
+  const cumulative = new Map<number, number>()
+  for (const [score, count] of counts) {
+    for (let lvl = 1; lvl <= score; lvl++) {
+      cumulative.set(lvl, (cumulative.get(lvl) ?? 0) + count)
+    }
+  }
+
+  for (let s = 5; s >= 1; s--) {
+    const count = cumulative.get(s) ?? 0
+    if (count === 0) continue
+    if (count < (MIN_EVENTS[s] ?? 1)) continue
+    return s
+  }
+  return 1
+}
 
 function conflictId(countryCode: string): string {
   return `conflict-${countryCode.toLowerCase()}`
@@ -9,12 +60,20 @@ function conflictId(countryCode: string): string {
 
 export async function persistEvent(
   event: NormalizedEvent,
-  allSourceNamesForCluster: string[]
-): Promise<{ threatLevelJumped: boolean; conflictId: string }> {
-  const threatLevel = scoreThreat(event.quadClass)
+  allSourceNamesForCluster: string[],
+  classify?: ClassifyResult,
+): Promise<{ threatLevelJumped: boolean; conflictId: string; discarded: boolean; eventId: string }> {
+  // Events without classification or classified-exclude are discarded
+  if (!classify || !classify.include) {
+    return { threatLevelJumped: false, conflictId: '', discarded: true, eventId: '' }
+  }
+
   const eventType = toEventType(event.eventRootCode)
   const confidence = scoreConfidence(allSourceNamesForCluster)
-  const title = buildTitle(event.actor1Name, event.actor2Name, eventType, event.region)
+
+  // Title comes from AI; buildTitle is the fallback for unenriched events (backfill only)
+  const title = classify.title
+
   const cId = conflictId(event.countryCode)
 
   const existing = await prisma.conflict.findUnique({
@@ -29,12 +88,11 @@ export async function persistEvent(
       name: event.region.split(',').pop()?.trim() ?? event.countryCode,
       region: event.countryCode,
       status: 'active',
-      threatLevel,
+      threatLevel: classify.severity,
       lat: event.lat,
       lng: event.lng,
     },
     update: {
-      threatLevel,
       lat: event.lat,
       lng: event.lng,
       status: 'active',
@@ -46,6 +104,8 @@ export async function persistEvent(
     create: {
       clusterId: event.globalEventId,
       title,
+      actor1: event.actor1Name || null,
+      actor2: event.actor2Name || null,
       eventType,
       lat: event.lat,
       lng: event.lng,
@@ -53,28 +113,57 @@ export async function persistEvent(
       confidence,
       publishedAt: event.publishedAt,
       conflictId: cId,
+      // AI classify fields
+      severity: classify.severity,
+      significance: classify.significance,
+      category: classify.category,
+      stabilityImpact: classify.stability_impact,
+      sourceTier: event.sourceTier,
+      locationConfidence: classify.location_confidence,
+      classified: true,
+      firstReportAt: event.publishedAt,
     },
-    update: { confidence },
+    update: {
+      title,
+      actor1: event.actor1Name || null,
+      actor2: event.actor2Name || null,
+      confidence,
+      // Re-classify updates these fields on re-ingest
+      severity: classify.severity,
+      significance: classify.significance,
+      category: classify.category,
+      stabilityImpact: classify.stability_impact,
+      locationConfidence: classify.location_confidence,
+    },
   })
 
-  await prisma.eventSource.create({
-    data: {
+  const computedThreat = await computeConflictThreat(cId)
+  await prisma.conflict.update({
+    where: { id: cId },
+    data: { threatLevel: computedThreat },
+  })
+
+  await prisma.eventSource.upsert({
+    where: { eventId_url: { eventId: eventRecord.id, url: event.url } },
+    create: {
       eventId: eventRecord.id,
       name: event.sourceName,
       url: event.url,
       publishedAt: event.publishedAt,
     },
+    update: {},
   })
 
   const threatLevelJumped =
-    existing !== null && Math.abs(existing.threatLevel - threatLevel) >= 2
+    existing !== null && Math.abs(existing.threatLevel - computedThreat) >= 2
 
-  return { threatLevelJumped, conflictId: cId }
+  return { threatLevelJumped, conflictId: cId, discarded: false, eventId: eventRecord.id }
 }
 
 export async function updateHeartbeat(
   sourcesOk: number,
-  sourcesFailed: number
+  sourcesFailed: number,
+  telemetry: { classifyCalls?: number; escalationCalls?: number; summaryCalls?: number } = {},
 ): Promise<void> {
   await prisma.heartbeat.upsert({
     where: { id: 1 },
@@ -83,11 +172,20 @@ export async function updateHeartbeat(
       lastIngestedAt: new Date(),
       sourcesOk,
       sourcesFailed,
+      classifyCalls: telemetry.classifyCalls ?? 0,
+      escalationCalls: telemetry.escalationCalls ?? 0,
+      summaryCalls: telemetry.summaryCalls ?? 0,
     },
     update: {
       lastIngestedAt: new Date(),
       sourcesOk,
       sourcesFailed,
+      classifyCalls: telemetry.classifyCalls ?? 0,
+      escalationCalls: telemetry.escalationCalls ?? 0,
+      summaryCalls: telemetry.summaryCalls ?? 0,
     },
   })
 }
+
+// Kept for backfill use only — not called in live pipeline
+export { buildTitle }
