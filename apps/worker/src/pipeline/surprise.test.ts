@@ -51,6 +51,15 @@ describe('computeNoveltyScore', () => {
     expect(score).toBeLessThanOrEqual(5)
   })
 
+  it('clips novelty score at -5 (lower bound)', async () => {
+    // Baseline: mean=10, stddev=0 → clamped denominator=1; novelty = (1-10)/1 = -9, clipped to -5
+    mockEventFindMany.mockResolvedValue([
+      { severity: 10 }, { severity: 10 }, { severity: 10 },
+    ])
+    const score = await computeNoveltyScore('conflict-ua', 1, new Date())
+    expect(score).toBe(-5)
+  })
+
   it('queries only events published before asOf (point-in-time)', async () => {
     mockEventFindMany.mockResolvedValue([])
     const asOf = new Date('2024-06-01')
