@@ -1,6 +1,7 @@
 import { prisma } from '@conflictwatch/db'
 import TerminalShell from '../components/TerminalShell'
 import SignalsView from './SignalsView'
+import { SEV_COLORS } from '../lib/tokens'
 
 export const dynamic = 'force-dynamic'
 
@@ -80,7 +81,7 @@ export default async function SignalsPage() {
               {/* Severity dot */}
               <span
                 className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                style={{ background: (['', '#64748b', '#ca8a04', '#ea580c', '#7c3aed', '#991b1b'] as const)[conflict.threatLevel] ?? '#64748b' }}
+                style={{ background: SEV_COLORS[conflict.threatLevel] ?? SEV_COLORS[1] }}
               />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-mono truncate text-white">{conflict.name}</div>

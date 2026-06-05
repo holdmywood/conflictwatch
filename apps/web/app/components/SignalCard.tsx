@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { sevColor } from '../lib/tokens'
 
 interface Signal {
   id: string
@@ -45,11 +46,6 @@ interface AnalogueData {
   analogues: Array<{ episodeId: string; conflictId: string; distance: number; escalatedToNational: boolean | null }>
 }
 
-// Severity → color token
-function sevColor(level: number): string {
-  return ['', '#64748b', '#ca8a04', '#ea580c', '#7c3aed', '#991b1b'][level] ?? '#64748b'
-}
-
 // pEscalation → forecast color token
 function forecastColor(p: number | null): string {
   if (p === null) return 'var(--forecast-low)'
@@ -72,17 +68,33 @@ interface SignalCardProps {
 export default function SignalCard({ signal, conflict }: SignalCardProps) {
   const [exposures, setExposures] = useState<ExposureLink[]>([])
   const [analogueData, setAnalogueData] = useState<AnalogueData | null>(null)
+  const [analogueError, setAnalogueError] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [loadingExposures, setLoadingExposures] = useState(true)
 
   useEffect(() => {
-    Promise.all([
-      fetch(`/api/conflict/${conflict.id}/exposures`).then(r => r.json()),
-      fetch(`/api/conflict/${conflict.id}/analogues?n=10`).then(r => r.json()),
-    ]).then(([exp, ana]) => {
-      setExposures(exp.exposures ?? [])
-      setAnalogueData(ana)
-    }).finally(() => setLoadingExposures(false))
+    const fetchExposures = fetch(`/api/conflict/${conflict.id}/exposures`)
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+
+    const fetchAnalogues = fetch(`/api/conflict/${conflict.id}/analogues?n=10`)
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+
+    Promise.all([fetchExposures, fetchAnalogues])
+      .then(([exp, ana]) => {
+        setExposures(exp?.exposures ?? [])
+        if (ana === null) {
+          setAnalogueError(true)
+          setAnalogueData(null)
+        } else {
+          setAnalogueData(ana)
+        }
+      })
+      .catch(() => {
+        setAnalogueError(true)
+      })
+      .finally(() => setLoadingExposures(false))
   }, [conflict.id])
 
   const p = signal.pEscalation
@@ -202,7 +214,14 @@ export default function SignalCard({ signal, conflict }: SignalCardProps) {
       </div>
 
       {/* ── Analogue base rate ──────────────────────────────────── */}
-      {analogueData && analogueData.totalCandidates > 0 && (
+      {analogueError ? (
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+            Historical analogues
+          </div>
+          <div className="text-xs" style={{ color: 'var(--text-dim)' }}>Analogues unavailable</div>
+        </div>
+      ) : analogueData && analogueData.totalCandidates > 0 ? (
         <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
           <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
             Historical analogues
@@ -226,7 +245,7 @@ export default function SignalCard({ signal, conflict }: SignalCardProps) {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ── Provenance expander ─────────────────────────────────── */}
       <div className="px-4 py-2">

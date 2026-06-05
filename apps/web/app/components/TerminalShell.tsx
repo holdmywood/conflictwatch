@@ -1,3 +1,5 @@
+import type React from 'react'
+
 interface TerminalShellProps {
   sidebar: React.ReactNode
   main: React.ReactNode
