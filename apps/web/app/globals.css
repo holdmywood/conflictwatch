@@ -31,7 +31,7 @@
   --forecast-low:      #475569;   /* < 20%   */
   --forecast-mid:      #1d4ed8;   /* 20–50%  */
   --forecast-elevated: #4f46e5;   /* 50–75%  */
-  --forecast-high:     #312e81;   /* > 75%   */
+  --forecast-high:     #818cf8;   /* > 75%   */
 
   /* ── Accent (AI label, unchanged amber) ── */
   --accent-amber: #f59e0b;
