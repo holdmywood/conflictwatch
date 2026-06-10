@@ -83,6 +83,73 @@ export function countryAt(lat: number, lng: number): CountryPolyFeature | null {
   return null
 }
 
+/* ── Country centroids (bbox center of the largest ring) ─────────────────── */
+
+function ringBboxCenter(rings: Ring[]): [number, number] {
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+  for (const [lng, lat] of rings[0]) {
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
+  return [(minLat + maxLat) / 2, (minLng + maxLng) / 2]
+}
+
+const CENTROIDS: Map<string, [number, number]> = (() => {
+  const m = new Map<string, [number, number]>()
+  for (const f of COUNTRY_FEATURES) {
+    const polys = f.geometry.type === 'Polygon'
+      ? [f.geometry.coordinates as Ring[]]
+      : (f.geometry.coordinates as Ring[][])
+    // Largest polygon by first-ring vertex count — avoids tiny offshore territories
+    const largest = polys.reduce((a, b) => (b[0].length > a[0].length ? b : a))
+    m.set(f.properties.name.toLowerCase(), ringBboxCenter(largest))
+  }
+  return m
+})()
+
+// Common WHO/news country spellings → Natural Earth names
+const COUNTRY_ALIASES: Record<string, string> = {
+  'united states': 'United States of America',
+  'usa': 'United States of America',
+  'democratic republic of the congo': 'Dem. Rep. Congo',
+  'dr congo': 'Dem. Rep. Congo',
+  'drc': 'Dem. Rep. Congo',
+  'republic of the congo': 'Congo',
+  'tanzania': 'Tanzania',
+  'south sudan': 'S. Sudan',
+  'central african republic': 'Central African Rep.',
+  'ivory coast': "Côte d'Ivoire",
+  "cote d'ivoire": "Côte d'Ivoire",
+  'burma': 'Myanmar',
+  'czech republic': 'Czechia',
+  'bosnia and herzegovina': 'Bosnia and Herz.',
+  'equatorial guinea': 'Eq. Guinea',
+  'dominican republic': 'Dominican Rep.',
+}
+
+/** Resolve a country name (NE or common spelling) to [lat, lng], or null. */
+export function countryCentroid(name: string): [number, number] | null {
+  const key = name.trim().toLowerCase()
+  const aliased = COUNTRY_ALIASES[key]
+  if (aliased) return CENTROIDS.get(aliased.toLowerCase()) ?? null
+  return CENTROIDS.get(key) ?? null
+}
+
+/** Resolve a country name (NE or common spelling) to its Natural Earth name. */
+export function toNeName(name: string): string | null {
+  const key = name.trim().toLowerCase()
+  if (COUNTRY_ALIASES[key]) return COUNTRY_ALIASES[key]
+  return CENTROIDS.has(key) ? COUNTRY_FEATURES.find(f => f.properties.name.toLowerCase() === key)?.properties.name ?? null : null
+}
+
+/** Known country names for parsing free-text titles ("…, Uganda"). */
+export const COUNTRY_NAMES: string[] = (() => {
+  const names = COUNTRY_FEATURES.map(f => f.properties.name)
+  return [...names, ...Object.keys(COUNTRY_ALIASES).map(k => k.replace(/\b\w/g, c => c.toUpperCase()))]
+})()
+
 /**
  * Bind conflicts to NE country names: point-in-polygon first, name fallback.
  * Returns both directions — conflictId → NE name, NE name → conflict.

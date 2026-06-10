@@ -54,3 +54,7 @@ export function fmtInt(n: number): string {
    glyph + label, urgency by size/pulse — never confusable with the warm
    severity ramp or the cool-blue forecast channel. */
 export const HAZARD_COLOR = '#4fb3a6'
+
+/* Contamination channel: muted orchid — distinct from severity (warm),
+   forecast (blue) and hazard (teal). */
+export const OUTBREAK_COLOR = '#b07ab0'

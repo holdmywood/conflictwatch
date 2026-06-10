@@ -76,13 +76,14 @@ export const LENSES: readonly Lens[] = [
   {
     id: 'contamination',
     label: 'Contamination',
-    status: 'pending-source',
-    plannedSources: 'WHO Disease Outbreak News · HealthMap · CDC/ECDC surveillance',
+    status: 'live',
     subToggles: [
       { id: 'outbreaks', label: 'Outbreaks', defaultOn: true },
-      { id: 'heatmap', label: 'Risk heatmap', defaultOn: false },
     ],
-    legend: [],
+    legend: [
+      { color: '#b07ab0', glyph: 'ring', label: 'Active outbreak (WHO DON)' },
+      { color: '#b07ab0', glyph: 'dot', label: 'Affected country' },
+    ],
   },
   {
     id: 'tracking',

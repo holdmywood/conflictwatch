@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
-import { sevColor, HAZARD_COLOR } from '../lib/tokens'
+import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
-import { COUNTRY_FEATURES, type CountryPolyFeature } from '../lib/countries'
+import { COUNTRY_FEATURES, toNeName, type CountryPolyFeature } from '../lib/countries'
 import type { LensId } from '../lib/lenses'
 
 export interface HazardPoint {
@@ -16,6 +16,17 @@ export interface HazardPoint {
   magnitude: number | null
   alertLevel: 'green' | 'orange' | 'red' | null
   time: string
+  url: string
+  source: string
+}
+
+export interface Outbreak {
+  id: string
+  disease: string
+  countries: string[]
+  points: Array<{ country: string; lat: number; lng: number }>
+  title: string
+  publishedAt: string
   url: string
   source: string
 }
@@ -49,6 +60,7 @@ interface GlobeProps {
   conflicts: ConflictPoint[]
   events: EventBlip[]
   hazards: HazardPoint[]
+  outbreaks: Outbreak[]
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
   conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
@@ -56,6 +68,7 @@ interface GlobeProps {
   onSelectEvent: (e: EventBlip) => void
   onSelectHotspot: (h: Hotspot) => void
   onSelectHazard: (h: HazardPoint) => void
+  onSelectOutbreak: (o: Outbreak) => void
   containerWidth?: number
   containerHeight?: number
 }
@@ -133,6 +146,19 @@ function quakeMarker(h: HazardPoint, onSelect: (h: HazardPoint) => void): Marker
   }
 }
 
+// One marker per affected country; ring layer pulses the same points.
+function outbreakMarkers(o: Outbreak, onSelect: (o: Outbreak) => void): Marker[] {
+  return o.points.map(p => ({
+    lat: p.lat,
+    lng: p.lng,
+    color: OUTBREAK_COLOR,
+    radius: 0.4,
+    label: tooltip(o.disease, `${p.country} · WHO · ${o.publishedAt.slice(0, 10)}`),
+    onClick: () => onSelect(o),
+    flyTo: false,
+  }))
+}
+
 const HAZARD_GLYPH_STYLE: Record<string, string> = {
   volcano: 'width:11px;height:11px;border:1.5px solid {c}',
   tsunami: 'width:12px;height:12px;border:1.5px solid {c};border-radius:50%',
@@ -171,8 +197,8 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, hazards, conflictByNeName, selectedCountryName,
-  onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard,
+  lens, toggles, conflicts, events, hazards, outbreaks, conflictByNeName, selectedCountryName,
+  onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard, onSelectOutbreak,
   containerWidth, containerHeight,
 }: GlobeProps) {
   const globeRef = useRef<any>(null)
@@ -261,25 +287,29 @@ export default function Globe({
   // ── Lens-scoped data layers (never stacked across lenses) ──────────────────
   const isConflictLens = lens === 'conflict'
   const isDisasterLens = lens === 'disasters'
+  const isContaminationLens = lens === 'contamination'
   const showEvents = isConflictLens && toggles['events'] !== false
   const showHotspots = isConflictLens && toggles['hotspots'] !== false
+  const showOutbreaks = isContaminationLens && toggles['outbreaks'] !== false
 
   const pointMarkers: Marker[] = useMemo(() => {
     if (showEvents) return events.map(e => eventMarker(e, onSelectEvent))
     if (isDisasterLens && toggles['earthquakes'] !== false) {
       return hazards.filter(h => h.kind === 'earthquake').map(h => quakeMarker(h, onSelectHazard))
     }
+    if (showOutbreaks) return outbreaks.flatMap(o => outbreakMarkers(o, onSelectOutbreak))
     return []
-  }, [showEvents, isDisasterLens, events, hazards, toggles, onSelectEvent, onSelectHazard])
+  }, [showEvents, isDisasterLens, showOutbreaks, events, hazards, outbreaks, toggles, onSelectEvent, onSelectHazard, onSelectOutbreak])
 
-  // Pulse rings: S4+ events (conflict) or red-alert hazards (disasters) only
+  // Pulse rings: S4+ events, red-alert hazards, or all outbreak points
   const ringMarkers: Marker[] = useMemo(() => {
     if (showEvents) return events.filter(e => e.severity >= 4).map(e => eventMarker(e, onSelectEvent))
     if (isDisasterLens) {
       return hazards.filter(h => h.alertLevel === 'red').map(h => ({ ...quakeMarker(h, onSelectHazard), color: 'var(--down)' }))
     }
+    if (showOutbreaks) return outbreaks.flatMap(o => outbreakMarkers(o, onSelectOutbreak))
     return []
-  }, [showEvents, isDisasterLens, events, hazards, onSelectEvent, onSelectHazard])
+  }, [showEvents, isDisasterLens, showOutbreaks, events, hazards, outbreaks, onSelectEvent, onSelectHazard, onSelectOutbreak])
 
   const hazardToggleOn = useCallback(
     (h: HazardPoint) =>
@@ -304,22 +334,36 @@ export default function Globe({
     [isDisasterLens, onSelectHazard, onSelectHotspot]
   )
 
+  // NE polygon names with an active outbreak (country spellings resolved)
+  const outbreakCountries = useMemo(() => {
+    if (!showOutbreaks) return new Set<string>()
+    const s = new Set<string>()
+    for (const o of outbreaks) for (const c of o.countries) {
+      const ne = toNeName(c)
+      if (ne) s.add(ne.toLowerCase())
+    }
+    return s
+  }, [showOutbreaks, outbreaks])
+
   const polygonCapColor = useCallback(
     (poly: object) => {
+      const name = (poly as PolyFeature).properties.name
       const isHover = poly === hoverPoly
-      const isSelected =
-        selectedCountryName !== null &&
-        (poly as PolyFeature).properties.name === selectedCountryName
-      const conflict = isConflictLens ? resolveConflict(poly) : null
+      const isSelected = selectedCountryName !== null && name === selectedCountryName
       if (isSelected) return 'rgba(200, 162, 74, 0.28)'
       if (isHover) return 'rgba(232, 229, 220, 0.14)'
+      if (isContaminationLens) {
+        // Choropleth: tint countries named in an active outbreak
+        return outbreakCountries.has(name.toLowerCase()) ? 'rgba(176, 122, 176, 0.30)' : 'rgba(0,0,0,0)'
+      }
+      const conflict = isConflictLens ? resolveConflict(poly) : null
       if (conflict && conflict.threatLevel >= 2) {
         const alpha = 0.10 + conflict.threatLevel * 0.05
         return `${sevColor(conflict.threatLevel)}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`
       }
       return 'rgba(0,0,0,0)'
     },
-    [hoverPoly, selectedCountryName, isConflictLens, resolveConflict]
+    [hoverPoly, selectedCountryName, isConflictLens, isContaminationLens, outbreakCountries, resolveConflict]
   )
 
   return (

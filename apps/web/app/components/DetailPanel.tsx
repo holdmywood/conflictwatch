@@ -6,7 +6,7 @@ import SevMark from './SevMark'
 import ConflictPanel from './ConflictPanel'
 import { fmtPct, fmtUTC, forecastColor } from '../lib/tokens'
 import type { Signal } from './SignalCard'
-import type { ConflictPoint, EventBlip, HazardPoint } from './Globe'
+import type { ConflictPoint, EventBlip, HazardPoint, Outbreak } from './Globe'
 import type { Hotspot } from '../lib/hotspots'
 
 /**
@@ -19,6 +19,7 @@ export type Selection =
   | { type: 'event'; event: EventBlip }
   | { type: 'hotspot'; hotspot: Hotspot }
   | { type: 'hazard'; hazard: HazardPoint }
+  | { type: 'outbreak'; outbreak: Outbreak }
 
 interface DetailPanelProps {
   selection: Selection | null
@@ -35,12 +36,14 @@ const TABS: Record<Selection['type'], string[]> = {
   event: ['Event', 'Sources'],
   hotspot: ['Zone', 'Exposure', 'Events', 'Maritime'],
   hazard: ['Hazard', 'Source'],
+  outbreak: ['Outbreak', 'Affected', 'Source'],
 }
 
 function selectionKey(sel: Selection): string {
   if (sel.type === 'country') return `country:${sel.name}`
   if (sel.type === 'event') return `event:${sel.event.id}`
   if (sel.type === 'hazard') return `hazard:${sel.hazard.id}`
+  if (sel.type === 'outbreak') return `outbreak:${sel.outbreak.id}`
   return `hotspot:${sel.hotspot.zone}`
 }
 
@@ -70,6 +73,7 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
     selection.type === 'country' ? selection.name
     : selection.type === 'event' ? 'Event'
     : selection.type === 'hazard' ? HAZARD_TITLES[selection.hazard.kind]
+    : selection.type === 'outbreak' ? selection.outbreak.disease
     : selection.hotspot.label
 
   return (
@@ -106,6 +110,7 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
           {selection.type === 'event' && <EventTabs tab={tabs[tab]} event={selection.event} />}
           {selection.type === 'hotspot' && <HotspotTabs tab={tabs[tab]} hotspot={selection.hotspot} blips={blips} />}
           {selection.type === 'hazard' && <HazardTabs tab={tabs[tab]} hazard={selection.hazard} />}
+          {selection.type === 'outbreak' && <OutbreakTabs tab={tabs[tab]} outbreak={selection.outbreak} />}
         </div>
       </div>
     </Panel>
@@ -306,6 +311,56 @@ function HazardTabs({ tab, hazard }: { tab: string; hazard: HazardPoint }) {
       <p className="text-[11px] pt-1">
         <a href={hazard.url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-2)' }}>
           Full report at {hazard.source} ↗
+        </a>
+      </p>
+    </div>
+  )
+}
+
+/* ── Outbreak ─────────────────────────────────────────────────────────────── */
+
+function OutbreakTabs({ tab, outbreak }: { tab: string; outbreak: Outbreak }) {
+  if (tab === 'Outbreak') {
+    return (
+      <div className="p-2.5 space-y-2">
+        <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{outbreak.title}</p>
+        <dl className="space-y-1">
+          <ProvRow k="Disease" v={outbreak.disease} />
+          <ProvRow k="Countries" v={outbreak.countries.length ? outbreak.countries.join(', ') : 'see report'} />
+          <ProvRow k="Reported" v={fmtUTC(outbreak.publishedAt)} />
+        </dl>
+        <p className="text-[10px] pt-1 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
+          Confirmed-case counts are in the WHO report, not this feed — opened via Source.
+        </p>
+      </div>
+    )
+  }
+  if (tab === 'Affected') {
+    if (outbreak.points.length === 0) {
+      return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>No country geolocated from the WHO headline — see the full report.</p>
+    }
+    return (
+      <ol className="divide-y" style={{ borderColor: 'var(--border)' }}>
+        {outbreak.points.map((p, i) => (
+          <li key={i} className="flex items-baseline gap-2 px-2.5 py-1.5">
+            <span className="text-[11px]" style={{ color: 'var(--text)' }}>{p.country}</span>
+            <span className="tabnum text-[10px] ml-auto" style={{ color: 'var(--text-3)' }}>
+              {p.lat.toFixed(1)}, {p.lng.toFixed(1)}
+            </span>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+  return (
+    <div className="p-2.5 space-y-1">
+      <dl className="space-y-1">
+        <ProvRow k="Source" v="WHO Disease Outbreak News" />
+        <ProvRow k="Feed id" v={outbreak.id} />
+      </dl>
+      <p className="text-[11px] pt-1">
+        <a href={outbreak.url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-2)' }}>
+          Full report at WHO ↗
         </a>
       </p>
     </div>
