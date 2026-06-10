@@ -25,5 +25,7 @@ export async function GET() {
       ...s,
       computedAt: s.computedAt.toISOString(),
     })),
+  }, {
+    headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
   })
 }

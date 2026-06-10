@@ -71,14 +71,20 @@ export async function fetchLeadText(url: string): Promise<LeadText | null> {
   }
 }
 
-// Try each URL in order of tier preference; return the first successful extraction.
-// Returns null if all fail — callers should drop the event in this case.
+// Fetch the highest-preference URLs concurrently and return the successful
+// extraction from the highest-ranked source. Serial fetching cost up to
+// 10s × N per cluster; concurrent fetching bounds it at one timeout.
+const MAX_CONCURRENT_FETCHES = 4
+
 export async function fetchBestLeadText(
   urls: string[],
 ): Promise<LeadText | null> {
-  for (const url of urls) {
-    const result = await fetchLeadText(url)
-    if (result) return result
+  for (let i = 0; i < urls.length; i += MAX_CONCURRENT_FETCHES) {
+    const batch = urls.slice(i, i + MAX_CONCURRENT_FETCHES)
+    const results = await Promise.all(batch.map(fetchLeadText))
+    // Preserve tier preference: first success in original order wins
+    const hit = results.find(r => r !== null)
+    if (hit) return hit
   }
   return null
 }

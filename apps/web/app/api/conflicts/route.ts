@@ -18,5 +18,7 @@ export async function GET() {
     orderBy: { threatLevel: 'desc' },
   })
 
-  return NextResponse.json(conflicts)
+  return NextResponse.json(conflicts, {
+    headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
+  })
 }

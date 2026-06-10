@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import cron from 'node-cron'
+import { prisma } from '@conflictwatch/db'
 import { GdeltSource } from './sources/gdelt.js'
 import { isDuplicate, clusterExists } from './pipeline/deduplicate.js'
 import {
@@ -63,8 +64,9 @@ async function runIngestionCycle(): Promise<void> {
     console.log(`[worker] fetched ${events.length} events from GDELT (post trust-gate)`)
 
     const clusters = groupByCluster(events)
-    const jumpedConflictIds = new Set<string>()
-    const accrualTouchedConflicts = new Set<string>()
+    // Conflicts whose evidence base changed this cycle — threat recomputes
+    // once per conflict at cycle end, not once per event.
+    const touchedConflicts = new Set<string>()
     let newCount = 0
     let accruedSources = 0
     let discardedNoFetch = 0
@@ -85,7 +87,7 @@ async function runIngestionCycle(): Promise<void> {
           const { accrued, conflictId, confidenceChanged } = await accrueSourceToCluster(event)
           if (accrued) accruedSources++
           // Confidence upgrades change the corroborated evidence base → threat must follow
-          if (confidenceChanged && conflictId) accrualTouchedConflicts.add(conflictId)
+          if (confidenceChanged && conflictId) touchedConflicts.add(conflictId)
         }
         continue
       }
@@ -128,13 +130,13 @@ async function runIngestionCycle(): Promise<void> {
         const dup = await isDuplicate(event.globalEventId, event.url)
         if (dup) continue
 
-        const { threatLevelJumped, conflictId, discarded, eventId } = await persistEvent(
+        const { conflictId, discarded, eventId } = await persistEvent(
           event, allSources, classify
         )
         if (discarded) continue
 
         newCount++
-        if (threatLevelJumped) jumpedConflictIds.add(conflictId)
+        touchedConflicts.add(conflictId)
 
         // Cluster event into a developing-story situation
         await matchOrCreateSituation({
@@ -152,11 +154,22 @@ async function runIngestionCycle(): Promise<void> {
       }
     }
 
-    // Confidence upgrades from accrual change which events count as corroborated
-    for (const cid of accrualTouchedConflicts) {
-      await recomputeConflictThreat(cid).catch(err =>
+    // Recompute threat once per touched conflict; a move of ≥2 levels in either
+    // direction is a material change worth an immediate assessment.
+    const jumpedConflictIds: string[] = []
+    for (const cid of touchedConflicts) {
+      try {
+        const before = await prisma.conflict.findUnique({
+          where: { id: cid },
+          select: { threatLevel: true },
+        })
+        const after = await recomputeConflictThreat(cid)
+        if (before && Math.abs(before.threatLevel - after) >= 2) {
+          jumpedConflictIds.push(cid)
+        }
+      } catch (err) {
         console.error(`[worker] threat recompute failed for ${cid}:`, err)
-      )
+      }
     }
 
     for (const cid of jumpedConflictIds) {

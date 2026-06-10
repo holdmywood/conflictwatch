@@ -119,10 +119,10 @@ export async function persistEvent(
   event: NormalizedEvent,
   allSourceNamesForCluster: string[],
   classify?: ClassifyResult,
-): Promise<{ threatLevelJumped: boolean; conflictId: string; discarded: boolean; eventId: string }> {
+): Promise<{ conflictId: string; discarded: boolean; eventId: string }> {
   // Events without classification or classified-exclude are discarded
   if (!classify || !classify.include) {
-    return { threatLevelJumped: false, conflictId: '', discarded: true, eventId: '' }
+    return { conflictId: '', discarded: true, eventId: '' }
   }
 
   const eventType = toEventType(event.eventRootCode)
@@ -133,11 +133,6 @@ export async function persistEvent(
 
   const cId = conflictId(event.countryCode)
 
-  const existing = await prisma.conflict.findUnique({
-    where: { id: cId },
-    select: { threatLevel: true },
-  })
-
   await prisma.conflict.upsert({
     where: { id: cId },
     create: {
@@ -145,7 +140,9 @@ export async function persistEvent(
       name: event.region.split(',').pop()?.trim() ?? event.countryCode,
       region: event.countryCode,
       status: 'active',
-      threatLevel: classify.severity,
+      // Threat comes only from sustained corroborated evidence
+      // (recomputeConflictThreat at cycle end) — never from one event.
+      threatLevel: 1,
       lat: event.lat,
       lng: event.lng,
     },
@@ -202,12 +199,6 @@ export async function persistEvent(
     },
   })
 
-  const computedThreat = await computeConflictThreat(cId)
-  await prisma.conflict.update({
-    where: { id: cId },
-    data: { threatLevel: computedThreat },
-  })
-
   await prisma.eventSource.upsert({
     where: { eventId_url: { eventId: eventRecord.id, url: event.url } },
     create: {
@@ -219,10 +210,7 @@ export async function persistEvent(
     update: {},
   })
 
-  const threatLevelJumped =
-    existing !== null && Math.abs(existing.threatLevel - computedThreat) >= 2
-
-  return { threatLevelJumped, conflictId: cId, discarded: false, eventId: eventRecord.id }
+  return { conflictId: cId, discarded: false, eventId: eventRecord.id }
 }
 
 export async function updateHeartbeat(

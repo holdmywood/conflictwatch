@@ -65,9 +65,6 @@ const sampleClassify: ClassifyResult = {
 //    2 severity-5 events → cumulative.get(2)=2  ≥ 2  → level 2
 //    0 events                                          → level 1
 
-const highThreatEvents = Array<{ severity: number }>(15).fill({ severity: 5 })
-const midThreatEvents  = Array<{ severity: number }>(5).fill({ severity: 5 })
-
 describe('persistEvent', () => {
   beforeEach(() => {
     mockUpsert.mockReset().mockResolvedValue({ id: 'event-cuid-1' })
@@ -113,82 +110,52 @@ describe('persistEvent', () => {
     )
   })
 
-  it('computes threatLevel 5 when 15 corroborated severity-5 events exist', async () => {
-    mockFindMany.mockResolvedValue(highThreatEvents)
+  it('creates new conflicts at threat level 1 — never seeded from one event severity', async () => {
+    mockFindUnique.mockResolvedValue(null)
     await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(mockUpdate).toHaveBeenCalledWith(
+    expect(mockUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'conflict-ua' },
-        data: expect.objectContaining({ threatLevel: 5 }),
+        create: expect.objectContaining({ threatLevel: 1 }),
       })
     )
   })
 
-  it('computes threatLevel 4 when 5 severity-5 events exist (cumulative hits level-4 threshold of 5)', async () => {
-    mockFindMany.mockResolvedValue(midThreatEvents)
+  it('does not recompute threat per event (recompute is batched per cycle)', async () => {
     await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ threatLevel: 4 }),
-      })
-    )
-  })
-
-  it('computes threatLevel 3 when 3 severity-5 events exist', async () => {
-    mockFindMany.mockResolvedValue(Array(3).fill({ severity: 5 }))
-    await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ threatLevel: 3 }),
-      })
-    )
-  })
-
-  it('computes threatLevel 2 when 2 severity-5 events exist (below level-3 threshold of 3)', async () => {
-    mockFindMany.mockResolvedValue(Array(2).fill({ severity: 5 }))
-    await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ threatLevel: 2 }),
-      })
-    )
-  })
-
-  it('computes threatLevel 1 when no events in the window', async () => {
-    mockFindMany.mockResolvedValue([])
-    await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ threatLevel: 1 }),
-      })
-    )
-  })
-
-  it('returns threatLevelJumped=false when no existing conflict', async () => {
-    mockFindUnique.mockResolvedValue(null)
-    mockFindMany.mockResolvedValue(highThreatEvents)
-    const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(result.threatLevelJumped).toBe(false)
-  })
-
-  it('returns threatLevelJumped=false when computed threat change is <2', async () => {
-    mockFindUnique.mockResolvedValue({ threatLevel: 4 })
-    mockFindMany.mockResolvedValue(highThreatEvents)
-    const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(result.threatLevelJumped).toBe(false)
-  })
-
-  it('returns threatLevelJumped=true when computed threat change is ≥2', async () => {
-    mockFindUnique.mockResolvedValue({ threatLevel: 2 })
-    mockFindMany.mockResolvedValue(highThreatEvents)
-    const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(result.threatLevelJumped).toBe(true)
+    expect(mockUpdate).not.toHaveBeenCalled()
   })
 
   it('returns conflictId matching countryCode', async () => {
     const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
     expect(result.conflictId).toBe('conflict-ua')
   })
+})
+
+describe('recomputeConflictThreat thresholds', () => {
+  beforeEach(() => {
+    mockFindMany.mockReset()
+    mockUpdate.mockReset().mockResolvedValue({})
+  })
+
+  const cases: Array<[number, number]> = [
+    [15, 5], // 15 corroborated severity-5 events → level 5
+    [5, 4],  // 5 → level 4
+    [3, 3],  // 3 → level 3
+    [2, 2],  // 2 → level 2
+    [0, 1],  // none → level 1
+  ]
+
+  for (const [count, expected] of cases) {
+    it(`computes level ${expected} from ${count} corroborated severity-5 events`, async () => {
+      mockFindMany.mockResolvedValue(Array(count).fill({ severity: 5 }))
+      const level = await recomputeConflictThreat('conflict-ua')
+      expect(level).toBe(expected)
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ threatLevel: expected }) })
+      )
+    })
+  }
 })
 
 describe('accrueSourceToCluster', () => {

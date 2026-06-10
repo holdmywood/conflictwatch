@@ -80,6 +80,9 @@ model Event {
 
   @@index([conflictId])
   @@index([classified])
+  @@index([publishedAt])
+  @@index([conflictId, publishedAt])
+  @@index([surpriseScore])
 }
 
 model EventSource {

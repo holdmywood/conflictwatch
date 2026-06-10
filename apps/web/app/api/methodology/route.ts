@@ -48,5 +48,7 @@ export async function GET() {
     reliabilityCurve: bins,
     modelVersion: latestSignal?.modelVersion ?? 'v0-logistic',
     modelUpdatedAt: latestSignal?.computedAt ?? null,
+  }, {
+    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' },
   })
 }

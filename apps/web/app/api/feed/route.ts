@@ -58,5 +58,7 @@ export async function GET(request: Request) {
   const items      = hasMore ? events.slice(0, PAGE_SIZE) : events
   const nextCursor = hasMore ? items[items.length - 1].id : null
 
-  return NextResponse.json({ events: items, nextCursor })
+  return NextResponse.json({ events: items, nextCursor }, {
+    headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=120' },
+  })
 }

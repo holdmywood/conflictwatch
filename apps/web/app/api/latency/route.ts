@@ -35,5 +35,7 @@ export async function GET() {
     sampleSize: diffs.length,
     windowDays: 30,
     computedAt: new Date().toISOString(),
+  }, {
+    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' },
   })
 }
