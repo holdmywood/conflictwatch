@@ -20,6 +20,8 @@ import { matchOrCreateSituation } from './pipeline/cluster.js'
 import { runAllEscalationPasses } from './pipeline/escalation.js'
 import { resolveOutcomes } from './ai/episode-logger.js'
 import { evaluateWatchlistRules } from './jobs/evaluateWatchlistRules.js'
+import { checkStaleness } from './jobs/staleness-alert.js'
+import { createCycleGuard } from './lib/run-guard.js'
 import type { NormalizedEvent } from './types.js'
 
 const gdelt = new GdeltSource()
@@ -178,13 +180,34 @@ async function runIngestionCycle(): Promise<void> {
   await updateHeartbeat(sourcesOk, sourcesFailed, { classifyCalls })
 }
 
+// A cycle that outlives the hard limit is presumed hung — exit and let the
+// platform restart a clean worker (Railway/systemd must be configured with
+// restart-on-exit; a dead worker silently serving stale data is the worst case).
+const CYCLE_HARD_LIMIT_MS = 15 * 60 * 1000
+const STALENESS_THRESHOLD_MIN = parseInt(process.env.OPS_STALENESS_THRESHOLD_MIN ?? '30', 10)
+
+const guardedIngestionCycle = createCycleGuard(runIngestionCycle, {
+  hardLimitMs: CYCLE_HARD_LIMIT_MS,
+})
+
 async function main(): Promise<void> {
+  // Crash posture: log and exit non-zero so the platform restarts us.
+  // Never linger in an unknown state serving a stale heartbeat.
+  process.on('uncaughtException', err => {
+    console.error('[worker] uncaught exception — exiting for restart:', err)
+    process.exit(1)
+  })
+  process.on('unhandledRejection', reason => {
+    console.error('[worker] unhandled rejection — exiting for restart:', reason)
+    process.exit(1)
+  })
+
   // Warm the trust gate cache before the first ingest cycle
   await initTrustGate()
 
-  await runIngestionCycle()
+  await guardedIngestionCycle()
 
-  const ingestionTask = cron.schedule('*/5 * * * *', runIngestionCycle)
+  const ingestionTask = cron.schedule('*/5 * * * *', guardedIngestionCycle)
   const hourlyTask = cron.schedule('0 * * * *', () =>
     runHourlyAssessments()
       .then(() => runAllEscalationPasses())
@@ -202,8 +225,14 @@ async function main(): Promise<void> {
       console.error('[worker] watchlist evaluation error:', err)
     )
   )
+  const stalenessTask = cron.schedule('*/5 * * * *', () =>
+    checkStaleness(STALENESS_THRESHOLD_MIN).catch(err =>
+      console.error('[worker] staleness check error:', err)
+    )
+  )
   console.log(
-    '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight'
+    '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight, ' +
+    `staleness alert at ${STALENESS_THRESHOLD_MIN}min`
   )
 
   const shutdown = async () => {
@@ -212,6 +241,7 @@ async function main(): Promise<void> {
     hourlyTask.stop()
     dailyTask.stop()
     watchlistTask.stop()
+    stalenessTask.stop()
     process.exit(0)
   }
 
