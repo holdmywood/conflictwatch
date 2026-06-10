@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockFindFirst = vi.fn()
 const mockCreate = vi.fn()
 const mockUpdate = vi.fn()
+const mockFindMany = vi.fn()
 
 vi.mock('@conflictwatch/db', () => ({
   prisma: {
@@ -10,11 +11,18 @@ vi.mock('@conflictwatch/db', () => ({
       findFirst: mockFindFirst,
       create: mockCreate,
       update: mockUpdate,
+      findMany: mockFindMany,
     },
   },
 }))
 
-const { matchOrCreateSituation, computeSituationStatus } = await import('./cluster.js')
+const {
+  matchOrCreateSituation,
+  computeSituationStatus,
+  situationLocationKey,
+  buildSituationTitle,
+  decayStaleSituations,
+} = await import('./cluster.js')
 
 const baseEvent = {
   id: 'evt-1',
@@ -66,7 +74,7 @@ describe('matchOrCreateSituation', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           conflictId: 'conflict-ua',
-          location: 'Kyiv, Ukraine',
+          location: 'kyiv, ukraine',
           eventIds: ['evt-1'],
           status: 'emerging',
         }),
@@ -74,6 +82,21 @@ describe('matchOrCreateSituation', () => {
     )
     expect(mockUpdate).not.toHaveBeenCalled()
     expect(result).toBe('sit-new')
+  })
+
+  it('matches on the normalized ADM1+country key, not the raw region string', async () => {
+    mockFindFirst.mockResolvedValue(null)
+    await matchOrCreateSituation({ ...baseEvent, region: 'Hostomel, Kyiv Oblast, Ukraine' })
+    const query = mockFindFirst.mock.calls[0][0]
+    expect(query.where.location).toBe('kyiv oblast, ukraine')
+  })
+
+  it('creates situations with a non-empty rule-based title', async () => {
+    mockFindFirst.mockResolvedValue(null)
+    await matchOrCreateSituation(baseEvent)
+    const created = mockCreate.mock.calls[0][0].data
+    expect(created.title).toBeTruthy()
+    expect(created.title).toContain('Kyiv, Ukraine')
   })
 
   it('includes new event id in updated eventIds', async () => {
@@ -138,5 +161,76 @@ describe('computeSituationStatus', () => {
   it('returns de-escalating when activity is recent but slowing', () => {
     const lastSeen = new Date(now.getTime() - 30 * 60 * 60 * 1000)
     expect(computeSituationStatus(4, lastSeen, now, 4)).toBe('de-escalating')
+  })
+})
+
+describe('situationLocationKey', () => {
+  it('keeps city+country for two-segment regions', () => {
+    expect(situationLocationKey('Kyiv, Ukraine')).toBe('kyiv, ukraine')
+  })
+  it('drops the city for three-segment regions (ADM1 + country)', () => {
+    expect(situationLocationKey('Hostomel, Kyiv Oblast, Ukraine')).toBe('kyiv oblast, ukraine')
+  })
+  it('handles country-only regions', () => {
+    expect(situationLocationKey('Ukraine')).toBe('ukraine')
+  })
+  it('trims whitespace and lowercases', () => {
+    expect(situationLocationKey('  Donetsk ,  Ukraine ')).toBe('donetsk, ukraine')
+  })
+})
+
+describe('buildSituationTitle', () => {
+  it('names both actors when present', () => {
+    expect(buildSituationTitle(['Russia', 'Ukraine'], ['19'], 'Kyiv, Ukraine'))
+      .toBe('Russia–Ukraine armed conflict — Kyiv, Ukraine')
+  })
+  it('falls back to type + location when no actors', () => {
+    expect(buildSituationTitle([], ['18'], 'Khartoum, Sudan'))
+      .toBe('Assaults — Khartoum, Sudan')
+  })
+  it('uses the most severe CAMEO root present', () => {
+    expect(buildSituationTitle([], ['17', '20'], 'X')).toBe('Mass violence — X')
+  })
+})
+
+describe('decayStaleSituations', () => {
+  beforeEach(() => {
+    mockFindMany.mockReset()
+    mockUpdate.mockReset().mockResolvedValue({})
+  })
+
+  it('resolves situations with no activity for >72h', async () => {
+    const now = new Date('2024-06-10T12:00:00Z')
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'sit-stale',
+        status: 'ongoing',
+        eventIds: ['a', 'b', 'c'],
+        lastSeenAt: new Date('2024-06-01T12:00:00Z'),
+      },
+    ])
+    const changed = await decayStaleSituations(now)
+    expect(changed).toBe(1)
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'sit-stale' },
+        data: { status: 'resolved' },
+      })
+    )
+  })
+
+  it('leaves situations whose status is unchanged alone', async () => {
+    const now = new Date('2024-06-10T12:00:00Z')
+    mockFindMany.mockResolvedValue([
+      {
+        id: 'sit-fresh',
+        status: 'ongoing',
+        eventIds: ['a', 'b', 'c'],
+        lastSeenAt: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+      },
+    ])
+    const changed = await decayStaleSituations(now)
+    expect(changed).toBe(0)
+    expect(mockUpdate).not.toHaveBeenCalled()
   })
 })

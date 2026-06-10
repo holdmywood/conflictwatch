@@ -17,7 +17,7 @@ import {
   runDailyReports,
   triggerAssessmentForConflict,
 } from './ai/assessor.js'
-import { matchOrCreateSituation } from './pipeline/cluster.js'
+import { matchOrCreateSituation, decayStaleSituations } from './pipeline/cluster.js'
 import { enqueueCluster, drainPending, removePending } from './pipeline/pending-queue.js'
 import { runAllEscalationPasses } from './pipeline/escalation.js'
 import { resolveOutcomes } from './ai/episode-logger.js'
@@ -248,6 +248,7 @@ async function main(): Promise<void> {
   const hourlyTask = cron.schedule('0 * * * *', () =>
     runHourlyAssessments()
       .then(() => runAllEscalationPasses())
+      .then(() => decayStaleSituations())
       .catch(err => console.error('[worker] hourly assessment error:', err))
   )
   const dailyTask = cron.schedule('0 0 * * *', () =>

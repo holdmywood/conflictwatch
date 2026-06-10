@@ -42,9 +42,41 @@ function hasActorOverlap(a: string[], b: string[]): boolean {
   return a.some(actor => b.includes(actor))
 }
 
+// Normalize a GDELT ActionGeo full name to a grouping key.
+// "City, ADM1, Country" → "adm1, country" — city-level granularity fragments
+// one story across neighborhoods; ADM1+country is the story's natural extent.
+export function situationLocationKey(region: string): string {
+  const segments = region.split(',').map(s => s.trim()).filter(Boolean)
+  return segments.slice(-2).join(', ').toLowerCase()
+}
+
+// Most severe CAMEO root present wins the type label.
+const ROOT_TITLE: Array<[string, string]> = [
+  ['20', 'Mass violence'],
+  ['19', 'Armed conflict'],
+  ['18', 'Assaults'],
+  ['17', 'Coercive incidents'],
+]
+
+// Deterministic title — no LLM. "Russia–Ukraine armed conflict — Kyiv, Ukraine"
+export function buildSituationTitle(
+  actors: string[],
+  cameoRoots: string[],
+  displayLocation: string,
+): string {
+  const type = ROOT_TITLE.find(([root]) => cameoRoots.includes(root))?.[1] ?? 'Incident series'
+  if (actors.length >= 2) {
+    return `${actors[0]}–${actors[1]} ${type.toLowerCase()} — ${displayLocation}`
+  }
+  if (actors.length === 1) {
+    return `${actors[0]} ${type.toLowerCase()} — ${displayLocation}`
+  }
+  return `${type} — ${displayLocation}`
+}
+
 // Match event to an existing open situation (within 7-day window, same conflict,
-// same region, overlapping actors or same CAMEO root). If no match, create one.
-// Returns the situation ID.
+// same normalized location, overlapping actors or same CAMEO root). If no
+// match, create one. Returns the situation ID.
 export async function matchOrCreateSituation(event: ClusterEvent): Promise<string> {
   if (!event.conflictId) {
     throw new Error('matchOrCreateSituation: event.conflictId is required')
@@ -52,13 +84,14 @@ export async function matchOrCreateSituation(event: ClusterEvent): Promise<strin
 
   const windowStart = new Date(event.publishedAt.getTime() - WINDOW_MS)
   const eventActors = actorsFromEvent(event)
+  const locationKey = situationLocationKey(event.region)
 
   const existing = await prisma.situation.findFirst({
     where: {
       conflictId: event.conflictId,
       status: { not: 'resolved' },
       lastSeenAt: { gte: windowStart },
-      location: event.region,
+      location: locationKey,
     },
     orderBy: { lastSeenAt: 'desc' },
   })
@@ -85,6 +118,10 @@ export async function matchOrCreateSituation(event: ClusterEvent): Promise<strin
         eventIds: mergedEventIds,
         lastSeenAt: event.publishedAt,
         status: newStatus,
+        // Backfill titles for situations created before titles existed
+        ...(existing.title === ''
+          ? { title: buildSituationTitle(mergedActors, mergedCameoRoots, event.region) }
+          : {}),
       },
     })
     return existing.id
@@ -94,9 +131,9 @@ export async function matchOrCreateSituation(event: ClusterEvent): Promise<strin
   const created = await prisma.situation.create({
     data: {
       conflictId: event.conflictId,
-      title: '',
+      title: buildSituationTitle(actors, [event.eventRootCode], event.region),
       status: 'emerging',
-      location: event.region,
+      location: locationKey,
       actors,
       cameoRoots: [event.eventRootCode],
       eventIds: [event.id],
@@ -105,4 +142,24 @@ export async function matchOrCreateSituation(event: ClusterEvent): Promise<strin
     },
   })
   return created.id
+}
+
+// Status decay for situations with no fresh events. Statuses are otherwise
+// only recomputed on event arrival, so a story that simply stops stays
+// "ongoing" forever. Run hourly. Returns the number of situations updated.
+export async function decayStaleSituations(now: Date = new Date()): Promise<number> {
+  const open = await prisma.situation.findMany({
+    where: { status: { not: 'resolved' } },
+    select: { id: true, status: true, eventIds: true, lastSeenAt: true },
+  })
+
+  let changed = 0
+  for (const sit of open) {
+    const next = computeSituationStatus(sit.eventIds.length, sit.lastSeenAt, now, sit.eventIds.length)
+    if (next !== sit.status) {
+      await prisma.situation.update({ where: { id: sit.id }, data: { status: next } })
+      changed++
+    }
+  }
+  return changed
 }
