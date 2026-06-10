@@ -8,7 +8,7 @@
  * placeholder, never fabricated data.
  */
 
-import { SEV_COLORS } from './tokens'
+import { SEV_COLORS, HAZARD_COLOR } from './tokens'
 
 export type LensId = 'conflict' | 'disasters' | 'contamination' | 'tracking'
 
@@ -58,14 +58,20 @@ export const LENSES: readonly Lens[] = [
   {
     id: 'disasters',
     label: 'Natural disasters',
-    status: 'pending-source',
-    plannedSources: 'USGS earthquake feeds · GDACS multi-hazard alerts · NOAA tsunami warnings',
+    status: 'live',
     subToggles: [
       { id: 'earthquakes', label: 'Earthquakes', defaultOn: true },
       { id: 'volcanoes', label: 'Volcanoes', defaultOn: true },
       { id: 'tsunami', label: 'Tsunami warnings', defaultOn: true },
+      { id: 'alerts', label: 'Cyclone/flood alerts', defaultOn: true },
     ],
-    legend: [],
+    legend: [
+      { color: HAZARD_COLOR, glyph: 'dot', label: 'Earthquake — size ∝ magnitude' },
+      { color: HAZARD_COLOR, glyph: 'square', label: 'Volcano' },
+      { color: HAZARD_COLOR, glyph: 'ring', label: 'Tsunami warning' },
+      { color: HAZARD_COLOR, glyph: 'diamond', label: 'Cyclone / flood alert' },
+      { color: 'var(--down)', glyph: 'ring', label: 'Red alert — pulsing' },
+    ],
   },
   {
     id: 'contamination',

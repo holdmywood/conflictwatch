@@ -49,3 +49,8 @@ export function fmtAgo(iso: string | Date): string {
 export function fmtInt(n: number): string {
   return n.toLocaleString('en-US')
 }
+
+/* Hazard channel (natural disasters): single teal hue, kind conveyed by
+   glyph + label, urgency by size/pulse — never confusable with the warm
+   severity ramp or the cool-blue forecast channel. */
+export const HAZARD_COLOR = '#4fb3a6'

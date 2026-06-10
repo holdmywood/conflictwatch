@@ -12,7 +12,7 @@ import Legend from './components/globe/Legend'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
 import { bindConflictsToCountries } from './lib/countries'
 import type { Signal } from './components/SignalCard'
-import type { ConflictPoint, EventBlip } from './components/Globe'
+import type { ConflictPoint, EventBlip, HazardPoint } from './components/Globe'
 
 const Globe = dynamic(() => import('./components/Globe'), {
   ssr: false,
@@ -48,6 +48,8 @@ export default function GlobePage() {
   const [conflictsError, setConflictsError] = useState(false)
   const [signals, setSignals] = useState<Map<string, Signal>>(new Map())
   const [blips, setBlips] = useState<EventBlip[]>([])
+  const [hazards, setHazards] = useState<HazardPoint[]>([])
+  const [hazardsState, setHazardsState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [selection, setSelection] = useState<Selection | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -84,6 +86,17 @@ export default function GlobePage() {
       )
       .catch(() => {})
   }, [])
+
+  // Lens data loads lazily — the disasters feed is only fetched when the
+  // lens is first activated.
+  useEffect(() => {
+    if (lensId !== 'disasters' || hazardsState !== 'idle') return
+    setHazardsState('loading')
+    fetch('/api/disasters')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { hazards: HazardPoint[] }) => { setHazards(d.hazards); setHazardsState('ok') })
+      .catch(() => setHazardsState('error'))
+  }, [lensId, hazardsState])
 
   useEffect(() => {
     const el = containerRef.current
@@ -130,12 +143,18 @@ export default function GlobePage() {
     <Panel
       title={`Globe — ${lens.label}`}
       meta={
-        lens.status === 'live' ? (
+        lens.status !== 'live' ? (
+          <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>no data source</span>
+        ) : lensId === 'disasters' ? (
+          <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
+            {hazardsState === 'loading' ? 'loading hazards…'
+              : hazardsState === 'error' ? 'feed unreachable'
+              : `${hazards.length} hazards · USGS + GDACS`}
+          </span>
+        ) : (
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
             {conflicts.length} conflicts · {blips.length} events
           </span>
-        ) : (
-          <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>no data source</span>
         )
       }
       flush
@@ -159,11 +178,13 @@ export default function GlobePage() {
             toggles={toggles}
             conflicts={conflicts}
             events={blips}
+            hazards={hazards}
             conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
             onSelectCountry={c => setSelection({ type: 'country', name: c.name, conflict: c.conflict })}
             onSelectEvent={e => setSelection({ type: 'event', event: e })}
             onSelectHotspot={h => setSelection({ type: 'hotspot', hotspot: h })}
+            onSelectHazard={h => setSelection({ type: 'hazard', hazard: h })}
             containerWidth={dims.width}
             containerHeight={dims.height}
           />

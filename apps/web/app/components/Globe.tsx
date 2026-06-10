@@ -2,10 +2,23 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
-import { sevColor } from '../lib/tokens'
+import { sevColor, HAZARD_COLOR } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
 import { COUNTRY_FEATURES, type CountryPolyFeature } from '../lib/countries'
 import type { LensId } from '../lib/lenses'
+
+export interface HazardPoint {
+  id: string
+  kind: 'earthquake' | 'volcano' | 'tsunami' | 'alert'
+  title: string
+  lat: number
+  lng: number
+  magnitude: number | null
+  alertLevel: 'green' | 'orange' | 'red' | null
+  time: string
+  url: string
+  source: string
+}
 
 export interface ConflictPoint {
   id: string
@@ -35,12 +48,14 @@ interface GlobeProps {
   toggles: Record<string, boolean>
   conflicts: ConflictPoint[]
   events: EventBlip[]
+  hazards: HazardPoint[]
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
   conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
   onSelectCountry: (c: CountryFeature) => void
   onSelectEvent: (e: EventBlip) => void
   onSelectHotspot: (h: Hotspot) => void
+  onSelectHazard: (h: HazardPoint) => void
   containerWidth?: number
   containerHeight?: number
 }
@@ -77,10 +92,66 @@ function geoJsonToPaths(geojson: {
 
 // ── Markers ──────────────────────────────────────────────────────────────────
 
-function eventLabel(e: EventBlip): string {
+function tooltip(title: string, sub: string): string {
   return `<div style="background:#1c1a15;border:1px solid #3d3930;padding:4px 8px;max-width:280px;font-family:var(--font-mono),monospace;font-size:11px;color:#e8e5dc">
-    ${e.title}<br/><span style="color:#a39e91">S${e.severity} · ${e.publishedAt.slice(0, 16).replace('T', ' ')}Z</span>
+    ${title}<br/><span style="color:#a39e91">${sub}</span>
   </div>`
+}
+
+/** Unified marker datum so point/ring layers stay lens-agnostic. */
+interface Marker {
+  lat: number
+  lng: number
+  color: string
+  radius: number
+  label: string
+  onClick: () => void
+  flyTo: boolean
+}
+
+function eventMarker(e: EventBlip, onSelect: (e: EventBlip) => void): Marker {
+  return {
+    lat: e.lat,
+    lng: e.lng,
+    color: sevColor(e.severity),
+    radius: 0.22 + e.severity * 0.07,
+    label: tooltip(e.title, `S${e.severity} · ${e.publishedAt.slice(0, 16).replace('T', ' ')}Z`),
+    onClick: () => onSelect(e),
+    flyTo: true,
+  }
+}
+
+function quakeMarker(h: HazardPoint, onSelect: (h: HazardPoint) => void): Marker {
+  return {
+    lat: h.lat,
+    lng: h.lng,
+    color: HAZARD_COLOR,
+    radius: 0.12 + (h.magnitude ?? 3) * 0.07,
+    label: tooltip(h.title, `${h.source} · ${h.time.slice(0, 16).replace('T', ' ')}Z`),
+    onClick: () => onSelect(h),
+    flyTo: false,
+  }
+}
+
+const HAZARD_GLYPH_STYLE: Record<string, string> = {
+  volcano: 'width:11px;height:11px;border:1.5px solid {c}',
+  tsunami: 'width:12px;height:12px;border:1.5px solid {c};border-radius:50%',
+  alert: 'width:11px;height:11px;border:1.5px solid {c};transform:rotate(45deg)',
+}
+
+function makeHazardEl(h: HazardPoint, onClick: (h: HazardPoint) => void): HTMLElement {
+  const el = document.createElement('button')
+  el.setAttribute('aria-label', `${h.kind}: ${h.title}`)
+  el.title = h.title
+  el.style.cssText = 'background:transparent;border:0;padding:2px;cursor:pointer;pointer-events:auto'
+  const inner = document.createElement('span')
+  const color = h.alertLevel === 'red' ? 'var(--down)' : HAZARD_COLOR
+  inner.style.cssText =
+    'display:block;box-shadow:0 0 0 1px rgba(0,0,0,0.55);' +
+    (HAZARD_GLYPH_STYLE[h.kind] ?? HAZARD_GLYPH_STYLE.alert).replaceAll('{c}', color)
+  el.appendChild(inner)
+  el.onclick = ev => { ev.stopPropagation(); onClick(h) }
+  return el
 }
 
 function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
@@ -100,8 +171,8 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, conflictByNeName, selectedCountryName,
-  onSelectCountry, onSelectEvent, onSelectHotspot,
+  lens, toggles, conflicts, events, hazards, conflictByNeName, selectedCountryName,
+  onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard,
   containerWidth, containerHeight,
 }: GlobeProps) {
   const globeRef = useRef<any>(null)
@@ -174,32 +245,64 @@ export default function Globe({
     [onSelectCountry, resolveConflict]
   )
 
-  const handleEventClick = useCallback(
-    (point: object) => {
-      const blip = point as EventBlip
-      const globe = globeRef.current
-      if (globe) {
+  const handleMarkerClick = useCallback((point: object) => {
+    const m = point as Marker
+    const globe = globeRef.current
+    if (globe) {
+      globe.controls().autoRotate = false
+      if (m.flyTo) {
         const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        globe.controls().autoRotate = false
-        globe.pointOfView({ lat: blip.lat, lng: blip.lng, altitude: 1.2 }, reduceMotion ? 0 : 700)
+        globe.pointOfView({ lat: m.lat, lng: m.lng, altitude: 1.2 }, reduceMotion ? 0 : 700)
       }
-      onSelectEvent(blip)
-    },
-    [onSelectEvent]
-  )
+    }
+    m.onClick()
+  }, [])
 
   // ── Lens-scoped data layers (never stacked across lenses) ──────────────────
   const isConflictLens = lens === 'conflict'
+  const isDisasterLens = lens === 'disasters'
   const showEvents = isConflictLens && toggles['events'] !== false
   const showHotspots = isConflictLens && toggles['hotspots'] !== false
 
-  const eventPoints = showEvents ? events : []
-  // Pulse rings only for high-severity events — restraint over spectacle
-  const ringEvents = useMemo(
-    () => (showEvents ? events.filter(e => e.severity >= 4) : []),
-    [events, showEvents]
+  const pointMarkers: Marker[] = useMemo(() => {
+    if (showEvents) return events.map(e => eventMarker(e, onSelectEvent))
+    if (isDisasterLens && toggles['earthquakes'] !== false) {
+      return hazards.filter(h => h.kind === 'earthquake').map(h => quakeMarker(h, onSelectHazard))
+    }
+    return []
+  }, [showEvents, isDisasterLens, events, hazards, toggles, onSelectEvent, onSelectHazard])
+
+  // Pulse rings: S4+ events (conflict) or red-alert hazards (disasters) only
+  const ringMarkers: Marker[] = useMemo(() => {
+    if (showEvents) return events.filter(e => e.severity >= 4).map(e => eventMarker(e, onSelectEvent))
+    if (isDisasterLens) {
+      return hazards.filter(h => h.alertLevel === 'red').map(h => ({ ...quakeMarker(h, onSelectHazard), color: 'var(--down)' }))
+    }
+    return []
+  }, [showEvents, isDisasterLens, events, hazards, onSelectEvent, onSelectHazard])
+
+  const hazardToggleOn = useCallback(
+    (h: HazardPoint) =>
+      (h.kind === 'volcano' && toggles['volcanoes'] !== false) ||
+      (h.kind === 'tsunami' && toggles['tsunami'] !== false) ||
+      (h.kind === 'alert' && toggles['alerts'] !== false),
+    [toggles]
   )
-  const hotspotData = showHotspots ? (HOTSPOTS as unknown as Hotspot[]) : []
+
+  // DOM markers: hotspot diamonds (conflict) or non-quake hazard glyphs (disasters)
+  const htmlData: object[] = useMemo(() => {
+    if (showHotspots) return HOTSPOTS as unknown as object[]
+    if (isDisasterLens) return hazards.filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
+    return []
+  }, [showHotspots, isDisasterLens, hazards, hazardToggleOn])
+
+  const makeHtmlEl = useCallback(
+    (d: object) =>
+      isDisasterLens
+        ? makeHazardEl(d as HazardPoint, onSelectHazard)
+        : makeHotspotEl(d as Hotspot, onSelectHotspot),
+    [isDisasterLens, onSelectHazard, onSelectHotspot]
+  )
 
   const polygonCapColor = useCallback(
     (poly: object) => {
@@ -249,30 +352,30 @@ export default function Globe({
       pathStroke={0.4}
       pathPointAlt={() => 0.0045}
       pathTransitionDuration={0}
-      /* Event blips — severity channel */
-      pointsData={eventPoints}
+      /* Point markers — events (severity channel) or quakes (hazard channel) */
+      pointsData={pointMarkers}
       pointLat="lat"
       pointLng="lng"
-      pointColor={(d: object) => sevColor((d as EventBlip).severity)}
-      pointRadius={(d: object) => 0.22 + (d as EventBlip).severity * 0.07}
+      pointColor={(d: object) => (d as Marker).color}
+      pointRadius={(d: object) => (d as Marker).radius}
       pointAltitude={0.012}
-      pointLabel={(d: object) => eventLabel(d as EventBlip)}
-      onPointClick={handleEventClick}
-      /* Pulse rings for S4+ only */
-      ringsData={ringEvents}
+      pointLabel={(d: object) => (d as Marker).label}
+      onPointClick={handleMarkerClick}
+      /* Pulse rings — S4+ events or red-alert hazards only */
+      ringsData={ringMarkers}
       ringLat="lat"
       ringLng="lng"
-      ringColor={(d: object) => () => sevColor((d as EventBlip).severity)}
+      ringColor={(d: object) => () => (d as Marker).color}
       ringMaxRadius={3.2}
       ringPropagationSpeed={1.4}
       ringRepeatPeriod={1800}
       ringAltitude={0.013}
-      /* Strategic hotspots — distinct diamond markers */
-      htmlElementsData={hotspotData}
+      /* DOM markers — hotspot diamonds or non-quake hazard glyphs */
+      htmlElementsData={htmlData}
       htmlLat="lat"
       htmlLng="lng"
       htmlAltitude={0.015}
-      htmlElement={(d: object) => makeHotspotEl(d as Hotspot, onSelectHotspot)}
+      htmlElement={makeHtmlEl}
     />
   )
 }

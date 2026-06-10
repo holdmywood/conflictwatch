@@ -6,7 +6,7 @@ import SevMark from './SevMark'
 import ConflictPanel from './ConflictPanel'
 import { fmtPct, fmtUTC, forecastColor } from '../lib/tokens'
 import type { Signal } from './SignalCard'
-import type { ConflictPoint, EventBlip } from './Globe'
+import type { ConflictPoint, EventBlip, HazardPoint } from './Globe'
 import type { Hotspot } from '../lib/hotspots'
 
 /**
@@ -18,6 +18,7 @@ export type Selection =
   | { type: 'country'; name: string; conflict: ConflictPoint | null }
   | { type: 'event'; event: EventBlip }
   | { type: 'hotspot'; hotspot: Hotspot }
+  | { type: 'hazard'; hazard: HazardPoint }
 
 interface DetailPanelProps {
   selection: Selection | null
@@ -33,11 +34,13 @@ const TABS: Record<Selection['type'], string[]> = {
   country: ['Assessment', 'Events', 'Exposure', 'Provenance'],
   event: ['Event', 'Sources'],
   hotspot: ['Zone', 'Exposure', 'Events', 'Maritime'],
+  hazard: ['Hazard', 'Source'],
 }
 
 function selectionKey(sel: Selection): string {
   if (sel.type === 'country') return `country:${sel.name}`
   if (sel.type === 'event') return `event:${sel.event.id}`
+  if (sel.type === 'hazard') return `hazard:${sel.hazard.id}`
   return `hotspot:${sel.hotspot.zone}`
 }
 
@@ -66,6 +69,7 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
   const title =
     selection.type === 'country' ? selection.name
     : selection.type === 'event' ? 'Event'
+    : selection.type === 'hazard' ? HAZARD_TITLES[selection.hazard.kind]
     : selection.hotspot.label
 
   return (
@@ -101,6 +105,7 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
           )}
           {selection.type === 'event' && <EventTabs tab={tabs[tab]} event={selection.event} />}
           {selection.type === 'hotspot' && <HotspotTabs tab={tabs[tab]} hotspot={selection.hotspot} blips={blips} />}
+          {selection.type === 'hazard' && <HazardTabs tab={tabs[tab]} hazard={selection.hazard} />}
         </div>
       </div>
     </Panel>
@@ -266,6 +271,44 @@ function EventTabs({ tab, event }: { tab: string; event: EventBlip }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/* ── Hazard ───────────────────────────────────────────────────────────────── */
+
+const HAZARD_TITLES: Record<HazardPoint['kind'], string> = {
+  earthquake: 'Earthquake',
+  volcano: 'Volcanic activity',
+  tsunami: 'Tsunami warning',
+  alert: 'Hazard alert',
+}
+
+function HazardTabs({ tab, hazard }: { tab: string; hazard: HazardPoint }) {
+  if (tab === 'Hazard') {
+    return (
+      <div className="p-2.5 space-y-2">
+        <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{hazard.title}</p>
+        <dl className="space-y-1">
+          {hazard.magnitude !== null && <ProvRow k="Magnitude" v={hazard.magnitude.toFixed(1)} />}
+          {hazard.alertLevel && <ProvRow k="Alert level" v={hazard.alertLevel.toUpperCase()} />}
+          <ProvRow k="Time" v={fmtUTC(hazard.time)} />
+          <ProvRow k="Position" v={`${hazard.lat.toFixed(2)}, ${hazard.lng.toFixed(2)}`} />
+        </dl>
+      </div>
+    )
+  }
+  return (
+    <div className="p-2.5 space-y-1">
+      <dl className="space-y-1">
+        <ProvRow k="Source" v={hazard.source} />
+        <ProvRow k="Feed id" v={hazard.id} />
+      </dl>
+      <p className="text-[11px] pt-1">
+        <a href={hazard.url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-2)' }}>
+          Full report at {hazard.source} ↗
+        </a>
+      </p>
+    </div>
   )
 }
 
