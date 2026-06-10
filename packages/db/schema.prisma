@@ -315,3 +315,16 @@ model Alert {
   @@index([conflictId])
   @@index([createdAt])
 }
+
+// Clusters that passed the trust gate but exceeded the per-cycle enrichment
+// cap. Deferred here (oldest first) instead of being lost when the 15-minute
+// GDELT file rotates; drained at the start of each ingestion cycle.
+model PendingCluster {
+  id          String   @id @default(cuid())
+  clusterId   String   @unique
+  payload     Json     // serialized NormalizedEvent[] for the cluster
+  attempts    Int      @default(0)
+  firstSeenAt DateTime @default(now())
+
+  @@index([firstSeenAt])
+}

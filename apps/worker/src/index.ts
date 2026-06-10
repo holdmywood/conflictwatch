@@ -18,6 +18,7 @@ import {
   triggerAssessmentForConflict,
 } from './ai/assessor.js'
 import { matchOrCreateSituation } from './pipeline/cluster.js'
+import { enqueueCluster, drainPending, removePending } from './pipeline/pending-queue.js'
 import { runAllEscalationPasses } from './pipeline/escalation.js'
 import { resolveOutcomes } from './ai/episode-logger.js'
 import { evaluateWatchlistRules } from './jobs/evaluateWatchlistRules.js'
@@ -64,6 +65,20 @@ async function runIngestionCycle(): Promise<void> {
     console.log(`[worker] fetched ${events.length} events from GDELT (post trust-gate)`)
 
     const clusters = groupByCluster(events)
+
+    // Deferred clusters from earlier over-cap cycles get priority over fresh
+    // ones; a fresh mention of a queued cluster supersedes the stored payload.
+    const pending = await drainPending(200)
+    const attemptsByCluster = new Map<string, number>()
+    const ordered = new Map<string, NormalizedEvent[]>()
+    for (const entry of pending) {
+      ordered.set(entry.clusterId, clusters.get(entry.clusterId) ?? entry.events)
+      attemptsByCluster.set(entry.clusterId, entry.attempts)
+    }
+    for (const [clusterId, clusterEvents] of clusters) {
+      if (!ordered.has(clusterId)) ordered.set(clusterId, clusterEvents)
+    }
+
     // Conflicts whose evidence base changed this cycle — threat recomputes
     // once per conflict at cycle end, not once per event.
     const touchedConflicts = new Set<string>()
@@ -73,9 +88,11 @@ async function runIngestionCycle(): Promise<void> {
     let discardedExcluded = 0
     let enrichQueued = 0
 
-    for (const [clusterId, clusterEvents] of clusters) {
+    for (const [clusterId, clusterEvents] of ordered) {
       const firstEvent = clusterEvents[0]
       if (!firstEvent || !firstEvent.countryCode || isNaN(firstEvent.lat) || isNaN(firstEvent.lng)) continue
+
+      const fromQueue = attemptsByCluster.has(clusterId)
 
       // Known cluster (already classified): new mentions are corroboration.
       // Accrue sources + cumulative confidence; never re-classify.
@@ -89,12 +106,16 @@ async function runIngestionCycle(): Promise<void> {
           // Confidence upgrades change the corroborated evidence base → threat must follow
           if (confidenceChanged && conflictId) touchedConflicts.add(conflictId)
         }
+        if (fromQueue) await removePending(clusterId)
         continue
       }
 
-      // New cluster: fetch lead + classify (gated by cycle cap)
+      // New cluster: fetch lead + classify (gated by cycle cap).
+      // Over-cap clusters are queued for later cycles, not dropped.
       if (classifyCalls >= MAX_ENRICH_PER_CYCLE) {
         enrichQueued++
+        await enqueueCluster(clusterId, clusterEvents, (attemptsByCluster.get(clusterId) ?? 0) + 1)
+          .catch(err => console.error(`[worker] enqueue failed for ${clusterId}:`, err))
         continue
       }
 
@@ -102,6 +123,7 @@ async function runIngestionCycle(): Promise<void> {
       const lead = await fetchBestLeadText(urls)
       if (!lead) {
         discardedNoFetch++
+        if (fromQueue) await removePending(clusterId)
         console.log(`[worker] dropped cluster ${clusterId} — all sources failed to fetch`)
         continue
       }
@@ -119,11 +141,13 @@ async function runIngestionCycle(): Promise<void> {
 
       if (!classify || !classify.include) {
         discardedExcluded++
+        if (fromQueue) await removePending(clusterId)
         console.log(
           `[worker] excluded cluster ${clusterId} — ${classify?.exclude_reason ?? 'classify failed'}`
         )
         continue
       }
+      if (fromQueue) await removePending(clusterId)
 
       // Persist all mentions in this cluster
       for (const event of clusterEvents) {
