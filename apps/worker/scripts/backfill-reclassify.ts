@@ -24,8 +24,8 @@ const ALLOWED_ROOT_CODES = new Set(['17', '18', '19', '20'])
 const THREAT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const MIN_EVENTS: Partial<Record<number, number>> = { 5: 15, 4: 5, 3: 3, 2: 2 }
 
-// Cost cap: classify at most this many events per backfill run
-const MAX_BACKFILL_CLASSIFY = 50
+// Cost cap: process at most this many events per backfill run
+const MAX_BACKFILL_CLASSIFY = parseInt(process.env.BACKFILL_CLASSIFY_CAP ?? '50', 10)
 
 // ── Threat computation using AI severity (mirrors persist.ts) ────────────────
 function computeThreat(events: { severity: number }[]): number {
@@ -105,10 +105,19 @@ async function main() {
   let dropped = 0
   const newlyClassifiedIds: string[] = []
 
+  // Dropped events are DELETED, matching live-pipeline behavior — a pre-gate
+  // event whose article can't be fetched or that the classifier excludes is
+  // noise that would otherwise be re-fetched on every run, forever.
+  const dropEvent = async (id: string) => {
+    await prisma.eventSource.deleteMany({ where: { eventId: id } })
+    await prisma.event.delete({ where: { id } })
+    dropped++
+  }
+
   for (const event of unclassified) {
     const urls = event.sources.map(s => s.url)
     const lead = await fetchBestLeadText(urls)
-    if (!lead) { dropped++; continue }
+    if (!lead) { await dropEvent(event.id); continue }
 
     const result = await classifyCluster(lead, {
       location: event.region,
@@ -117,7 +126,7 @@ async function main() {
       sourceBreadth: urls.length,
     })
 
-    if (!result || !result.include) { dropped++; continue }
+    if (!result || !result.include) { await dropEvent(event.id); continue }
 
     await prisma.event.update({
       where: { id: event.id },
