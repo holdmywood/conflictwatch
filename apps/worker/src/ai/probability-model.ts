@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WEIGHTS_PATH = join(__dirname, 'model-weights.json')
 
-export const MODEL_VERSION_FALLBACK = 'v0-logistic'
+export const MODEL_VERSION_FALLBACK = 'v0-prior-untrained'
 
 export interface ModelWeights {
   version: string
@@ -22,9 +22,11 @@ export interface ModelWeights {
   brierScore?: number
 }
 
-// v0 fallback: the original hardcoded logistic priors expressed as a weight vector
+// v0 fallback: hand-set domain priors expressed as a weight vector.
+// The version string says so — an untrained prior must not present as a
+// fitted model.
 const FALLBACK_WEIGHTS: ModelWeights = {
-  version: 'v0-logistic',
+  version: MODEL_VERSION_FALLBACK,
   intercept: -3.5,
   coefs: {
     eventTempo: 0.14,      // 0.8 over threshold 5 ≈ 0.14/unit
@@ -74,9 +76,14 @@ export function computePEscalation(features: {
     w.coefs.actorCount * features.actorCount
 
   const p = Math.round(sigmoid(logit) * 100) / 100
-  // CI width shrinks as training data grows: 0.15 at n=0, ~0.05 at n=200+
+  // Interval honesty: an untrained prior gets ±0.25 — wide enough that no one
+  // mistakes it for a fitted model's precision. With training data the width
+  // shrinks heuristically (0.15 at n=20 → floor 0.05 by n≈200). Replace with a
+  // bootstrap/Wilson interval from calibration bins once outcomes accumulate.
   const n = w.trainedOn
-  const halfWidth = Math.round(Math.max(0.05, 0.15 - n * 0.0005) * 100) / 100
+  const halfWidth = n === 0
+    ? 0.25
+    : Math.round(Math.max(0.05, 0.15 - n * 0.0005) * 100) / 100
   return {
     p,
     ciLow: Math.max(0, Math.round((p - halfWidth) * 100) / 100),

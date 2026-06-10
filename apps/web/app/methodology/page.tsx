@@ -111,11 +111,18 @@ export default function MethodologyPage() {
         <div className="max-w-3xl space-y-1.5">
           <Panel title="Probability model">
             <p className="text-[12.5px] leading-relaxed max-w-[68ch] mb-2.5" style={{ color: 'var(--text)' }}>
-              Escalation probabilities come from an L2-regularized logistic regression over five trend
+              Escalation probabilities come from a logistic model over five trend
               features: event tempo, severity slope, geographic spread, source breadth, and actor count.
               The language model writes the rationale; the number is computed deterministically from
               stored inputs and is reproducible from the signal&apos;s provenance record.
             </p>
+            {data?.modelVersion.includes('prior') && (
+              <p className="text-[12px] leading-relaxed max-w-[68ch] mb-2.5" style={{ color: 'var(--text-2)' }}>
+                The current weights are hand-set domain priors, not fitted coefficients — no resolved
+                outcomes have trained the model yet. Intervals are held at ±25 points until they can be
+                derived from observed calibration.
+              </p>
+            )}
             {loading ? (
               <p className="tabnum text-[11px]" style={{ color: 'var(--text-3)' }}>Loading…</p>
             ) : error ? (

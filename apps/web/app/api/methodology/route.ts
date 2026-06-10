@@ -46,7 +46,7 @@ export async function GET() {
     pendingResolution,
     meanBrierScore: meanBrier !== null ? Math.round(meanBrier * 10000) / 10000 : null,
     reliabilityCurve: bins,
-    modelVersion: latestSignal?.modelVersion ?? 'v0-logistic',
+    modelVersion: latestSignal?.modelVersion ?? 'v0-prior-untrained',
     modelUpdatedAt: latestSignal?.computedAt ?? null,
   }, {
     headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' },
