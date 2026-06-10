@@ -12,9 +12,11 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
+const mockAssessmentFindFirst = vi.fn().mockResolvedValue(null)
+
 vi.mock('@conflictwatch/db', () => ({
   prisma: {
-    assessment: { create: mockAssessmentCreate },
+    assessment: { create: mockAssessmentCreate, findFirst: mockAssessmentFindFirst },
     conflict: {
       findMany: mockConflictFindMany,
       findUnique: mockConflictFindUnique,
@@ -23,7 +25,8 @@ vi.mock('@conflictwatch/db', () => ({
   },
 }))
 
-const { generatePrediction, generateDailyReport, generateSituationLine } = await import('./assessor.js')
+const { generatePrediction, generateDailyReport, generateSituationLine, runHourlyAssessments, hasNewEvents } =
+  await import('./assessor.js')
 
 const sampleEvents = [
   {
@@ -65,10 +68,10 @@ describe('generatePrediction', () => {
     expect(mockAssessmentCreate).not.toHaveBeenCalled()
   })
 
-  it('calls Claude with model claude-sonnet-4-6', async () => {
+  it('calls Claude with the Haiku model (cost doctrine: Haiku for narratives)', async () => {
     await generatePrediction('conflict-ua', 'Ukraine', sampleEvents)
     expect(mockMessagesCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'claude-sonnet-4-6' })
+      expect.objectContaining({ model: 'claude-haiku-4-5-20251001' })
     )
   })
 
@@ -166,5 +169,52 @@ describe('generateSituationLine', () => {
         }),
       })
     )
+  })
+})
+
+describe('hasNewEvents', () => {
+  it('returns true when an event id is not covered by the last assessment', () => {
+    expect(hasNewEvents(['evt-1', 'evt-2'], ['evt-1'])).toBe(true)
+  })
+  it('returns false when all current events were already assessed', () => {
+    expect(hasNewEvents(['evt-1'], ['evt-1', 'evt-0'])).toBe(false)
+  })
+  it('returns true when there is no previous assessment', () => {
+    expect(hasNewEvents(['evt-1'], null)).toBe(true)
+  })
+})
+
+describe('runHourlyAssessments change gate', () => {
+  beforeEach(() => {
+    mockMessagesCreate.mockReset().mockResolvedValue({
+      content: [{ type: 'text', text: 'Outlook text.' }],
+    })
+    mockAssessmentCreate.mockReset().mockResolvedValue({ id: 'asmt-1' })
+    mockAssessmentFindFirst.mockReset().mockResolvedValue(null)
+    mockConflictFindMany.mockReset()
+    mockConflictUpdate.mockReset().mockResolvedValue({})
+  })
+
+  it('skips conflicts whose events are all covered by the latest assessment', async () => {
+    mockConflictFindMany.mockResolvedValue([
+      { id: 'conflict-ua', name: 'Ukraine', events: sampleEvents },
+    ])
+    mockAssessmentFindFirst.mockResolvedValue({ usedEventIds: ['evt-1'] })
+
+    await runHourlyAssessments()
+
+    expect(mockMessagesCreate).not.toHaveBeenCalled()
+    expect(mockAssessmentCreate).not.toHaveBeenCalled()
+  })
+
+  it('assesses conflicts that have events the last assessment did not use', async () => {
+    mockConflictFindMany.mockResolvedValue([
+      { id: 'conflict-ua', name: 'Ukraine', events: sampleEvents },
+    ])
+    mockAssessmentFindFirst.mockResolvedValue({ usedEventIds: ['evt-0'] })
+
+    await runHourlyAssessments()
+
+    expect(mockAssessmentCreate).toHaveBeenCalled()
   })
 })

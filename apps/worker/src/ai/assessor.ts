@@ -3,6 +3,10 @@ import { prisma } from '@conflictwatch/db'
 
 const client = new Anthropic()
 
+// Cost doctrine: Haiku for all narrative generation. The numbers come from
+// the deterministic model; the LLM only writes language.
+const MODEL = 'claude-haiku-4-5-20251001'
+
 const SYSTEM_PROMPT =
   `You are a conflict intelligence analyst. Analyze conflict events and provide concise, ` +
   `factual assessments. Focus on observable patterns. Do not speculate beyond what the data supports.`
@@ -38,7 +42,7 @@ export async function generatePrediction(
     `\n\nRespond with ONLY the outlook text. No headers or formatting.`
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: MODEL,
     max_tokens: 512,
     system: [
       {
@@ -81,7 +85,7 @@ export async function generateDailyReport(
     `Respond with ONLY the summary text.`
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: MODEL,
     max_tokens: 512,
     system: [
       {
@@ -123,7 +127,7 @@ export async function generateSituationLine(
     `\n\nRespond with ONLY the sentence. No punctuation at the end beyond a period.`
 
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: MODEL,
     max_tokens: 100,
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } as const }],
     messages: [{ role: 'user', content: userPrompt }],
@@ -138,6 +142,15 @@ export async function generateSituationLine(
     where: { id: conflictId },
     data: { currentSituationLine: line },
   })
+}
+
+// Change gate: an assessment is regenerated only when the conflict has an
+// event the previous assessment did not use. Re-assessing the same evidence
+// hourly is pure cost with zero new information.
+export function hasNewEvents(currentEventIds: string[], lastUsedEventIds: string[] | null): boolean {
+  if (!lastUsedEventIds) return true
+  const used = new Set(lastUsedEventIds)
+  return currentEventIds.some(id => !used.has(id))
 }
 
 export async function runHourlyAssessments(): Promise<void> {
@@ -160,6 +173,16 @@ export async function runHourlyAssessments(): Promise<void> {
   })
   for (const conflict of conflicts) {
     if (conflict.events.length === 0) continue
+
+    const lastAssessment = await prisma.assessment.findFirst({
+      where: { region: conflict.id, kind: 'prediction' },
+      orderBy: { createdAt: 'desc' },
+      select: { usedEventIds: true },
+    })
+    if (!hasNewEvents(conflict.events.map(e => e.id), lastAssessment?.usedEventIds ?? null)) {
+      continue
+    }
+
     await generatePrediction(conflict.id, conflict.name, conflict.events)
     await generateSituationLine(conflict.id, conflict.name, conflict.events)
   }
