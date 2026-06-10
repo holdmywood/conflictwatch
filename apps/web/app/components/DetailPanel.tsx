@@ -6,8 +6,9 @@ import SevMark from './SevMark'
 import ConflictPanel from './ConflictPanel'
 import { fmtPct, fmtUTC, forecastColor } from '../lib/tokens'
 import type { Signal } from './SignalCard'
-import type { ConflictPoint, EventBlip, HazardPoint, Outbreak } from './Globe'
+import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, Aircraft } from './Globe'
 import type { Hotspot } from '../lib/hotspots'
+import type { MilitarySite } from '../lib/military-sites'
 
 /**
  * The one contextual detail panel. Every globe click target opens here with
@@ -20,6 +21,8 @@ export type Selection =
   | { type: 'hotspot'; hotspot: Hotspot }
   | { type: 'hazard'; hazard: HazardPoint }
   | { type: 'outbreak'; outbreak: Outbreak }
+  | { type: 'aircraft'; aircraft: Aircraft }
+  | { type: 'militarySite'; site: MilitarySite }
 
 interface DetailPanelProps {
   selection: Selection | null
@@ -37,6 +40,8 @@ const TABS: Record<Selection['type'], string[]> = {
   hotspot: ['Zone', 'Exposure', 'Events', 'Maritime'],
   hazard: ['Hazard', 'Source'],
   outbreak: ['Outbreak', 'Affected', 'Source'],
+  aircraft: ['Aircraft'],
+  militarySite: ['Site'],
 }
 
 function selectionKey(sel: Selection): string {
@@ -44,6 +49,8 @@ function selectionKey(sel: Selection): string {
   if (sel.type === 'event') return `event:${sel.event.id}`
   if (sel.type === 'hazard') return `hazard:${sel.hazard.id}`
   if (sel.type === 'outbreak') return `outbreak:${sel.outbreak.id}`
+  if (sel.type === 'aircraft') return `aircraft:${sel.aircraft.icao24}`
+  if (sel.type === 'militarySite') return `mil:${sel.site.id}`
   return `hotspot:${sel.hotspot.zone}`
 }
 
@@ -74,6 +81,8 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
     : selection.type === 'event' ? 'Event'
     : selection.type === 'hazard' ? HAZARD_TITLES[selection.hazard.kind]
     : selection.type === 'outbreak' ? selection.outbreak.disease
+    : selection.type === 'aircraft' ? (selection.aircraft.callsign || selection.aircraft.icao24)
+    : selection.type === 'militarySite' ? selection.site.name
     : selection.hotspot.label
 
   return (
@@ -111,6 +120,8 @@ export default function DetailPanel({ selection, signals, situationLines, blips 
           {selection.type === 'hotspot' && <HotspotTabs tab={tabs[tab]} hotspot={selection.hotspot} blips={blips} />}
           {selection.type === 'hazard' && <HazardTabs tab={tabs[tab]} hazard={selection.hazard} />}
           {selection.type === 'outbreak' && <OutbreakTabs tab={tabs[tab]} outbreak={selection.outbreak} />}
+          {selection.type === 'aircraft' && <AircraftTab aircraft={selection.aircraft} />}
+          {selection.type === 'militarySite' && <MilitarySiteTab site={selection.site} />}
         </div>
       </div>
     </Panel>
@@ -313,6 +324,46 @@ function HazardTabs({ tab, hazard }: { tab: string; hazard: HazardPoint }) {
           Full report at {hazard.source} ↗
         </a>
       </p>
+    </div>
+  )
+}
+
+/* ── Aircraft & military site ─────────────────────────────────────────────── */
+
+function AircraftTab({ aircraft }: { aircraft: Aircraft }) {
+  return (
+    <div className="p-2.5 space-y-1">
+      <dl className="space-y-1">
+        <ProvRow k="Callsign" v={aircraft.callsign || '—'} />
+        <ProvRow k="ICAO24" v={aircraft.icao24} />
+        <ProvRow k="Origin" v={aircraft.originCountry} />
+        <ProvRow k="Position" v={`${aircraft.lat.toFixed(2)}, ${aircraft.lng.toFixed(2)}`} />
+        <ProvRow k="Altitude" v={aircraft.baroAltitudeM !== null ? `${Math.round(aircraft.baroAltitudeM)} m` : 'n/a'} />
+        <ProvRow k="Velocity" v={aircraft.velocityMs !== null ? `${Math.round(aircraft.velocityMs)} m/s` : 'n/a'} />
+        <ProvRow k="On ground" v={aircraft.onGround ? 'yes' : 'no'} />
+      </dl>
+      <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
+        ADS-B via OpenSky. Military aircraft often do not broadcast — coverage is partial.
+      </p>
+    </div>
+  )
+}
+
+function MilitarySiteTab({ site }: { site: MilitarySite }) {
+  return (
+    <div className="p-2.5 space-y-1">
+      <dl className="space-y-1">
+        <ProvRow k="Site" v={site.name} />
+        <ProvRow k="Country" v={site.country} />
+        <ProvRow k="Branch" v={site.branch} />
+        <ProvRow k="Operator" v={site.operator} />
+        <ProvRow k="Position" v={`${site.lat.toFixed(2)}, ${site.lng.toFixed(2)}`} />
+      </dl>
+      {site.reviewStatus === 'unreviewed' && (
+        <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
+          Curated from open sources; awaiting editorial review. The set is a small seed, not an order of battle.
+        </p>
+      )}
     </div>
   )
 }

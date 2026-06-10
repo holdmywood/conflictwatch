@@ -8,7 +8,7 @@
  * placeholder, never fabricated data.
  */
 
-import { SEV_COLORS, HAZARD_COLOR } from './tokens'
+import { SEV_COLORS, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR } from './tokens'
 
 export type LensId = 'conflict' | 'disasters' | 'contamination' | 'tracking'
 
@@ -81,22 +81,24 @@ export const LENSES: readonly Lens[] = [
       { id: 'outbreaks', label: 'Outbreaks', defaultOn: true },
     ],
     legend: [
-      { color: '#b07ab0', glyph: 'ring', label: 'Active outbreak (WHO DON)' },
-      { color: '#b07ab0', glyph: 'dot', label: 'Affected country' },
+      { color: OUTBREAK_COLOR, glyph: 'ring', label: 'Active outbreak (WHO DON)' },
+      { color: OUTBREAK_COLOR, glyph: 'dot', label: 'Affected country' },
     ],
   },
   {
     id: 'tracking',
     label: 'Tracking',
-    status: 'pending-source',
-    plannedSources: 'OpenSky ADS-B (free) · AIS vessel feed (key required) · curated military sites',
+    status: 'live',
     subToggles: [
-      { id: 'vessels', label: 'Vessels', defaultOn: true },
-      { id: 'aircraft', label: 'Aircraft', defaultOn: true },
-      { id: 'military-sites', label: 'Military sites', defaultOn: false },
-      { id: 'missile-events', label: 'Missile events (report-derived)', defaultOn: false },
+      { id: 'aircraft', label: 'Aircraft (ADS-B)', defaultOn: true },
+      { id: 'military-sites', label: 'Military sites', defaultOn: true },
+      { id: 'vessels', label: 'Vessels (AIS key)', defaultOn: false },
+      { id: 'missile-events', label: 'Missile events', defaultOn: false },
     ],
-    legend: [],
+    legend: [
+      { color: AIRCRAFT_COLOR, glyph: 'dot', label: 'Aircraft (ADS-B)' },
+      { color: 'var(--accent)', glyph: 'square', label: 'Military site (curated)' },
+    ],
   },
 ] as const
 

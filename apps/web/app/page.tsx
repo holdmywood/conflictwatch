@@ -12,7 +12,7 @@ import Legend from './components/globe/Legend'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
 import { bindConflictsToCountries } from './lib/countries'
 import type { Signal } from './components/SignalCard'
-import type { ConflictPoint, EventBlip, HazardPoint, Outbreak } from './components/Globe'
+import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, Aircraft } from './components/Globe'
 
 const Globe = dynamic(() => import('./components/Globe'), {
   ssr: false,
@@ -52,6 +52,8 @@ export default function GlobePage() {
   const [hazardsState, setHazardsState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [outbreaks, setOutbreaks] = useState<Outbreak[]>([])
   const [outbreaksState, setOutbreaksState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [aircraft, setAircraft] = useState<Aircraft[]>([])
+  const [aircraftState, setAircraftState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [selection, setSelection] = useState<Selection | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -108,6 +110,15 @@ export default function GlobePage() {
       .then((d: { outbreaks: Outbreak[] }) => { setOutbreaks(d.outbreaks); setOutbreaksState('ok') })
       .catch(() => setOutbreaksState('error'))
   }, [lensId, outbreaksState])
+
+  useEffect(() => {
+    if (lensId !== 'tracking' || aircraftState !== 'idle') return
+    setAircraftState('loading')
+    fetch('/api/tracking/aircraft')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { aircraft: Aircraft[] }) => { setAircraft(d.aircraft ?? []); setAircraftState('ok') })
+      .catch(() => setAircraftState('error'))
+  }, [lensId, aircraftState])
 
   useEffect(() => {
     const el = containerRef.current
@@ -168,6 +179,12 @@ export default function GlobePage() {
               : outbreaksState === 'error' ? 'feed unreachable'
               : `${outbreaks.length} outbreaks · WHO DON`}
           </span>
+        ) : lensId === 'tracking' ? (
+          <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
+            {aircraftState === 'loading' ? 'loading ADS-B…'
+              : aircraftState === 'error' ? 'OpenSky unreachable'
+              : `${aircraft.length} aircraft · OpenSky`}
+          </span>
         ) : (
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
             {conflicts.length} conflicts · {blips.length} events
@@ -197,6 +214,7 @@ export default function GlobePage() {
             events={blips}
             hazards={hazards}
             outbreaks={outbreaks}
+            aircraft={aircraft}
             conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
             onSelectCountry={c => setSelection({ type: 'country', name: c.name, conflict: c.conflict })}
@@ -204,10 +222,21 @@ export default function GlobePage() {
             onSelectHotspot={h => setSelection({ type: 'hotspot', hotspot: h })}
             onSelectHazard={h => setSelection({ type: 'hazard', hazard: h })}
             onSelectOutbreak={o => setSelection({ type: 'outbreak', outbreak: o })}
+            onSelectAircraft={a => setSelection({ type: 'aircraft', aircraft: a })}
+            onSelectMilitarySite={s => setSelection({ type: 'militarySite', site: s })}
             containerWidth={dims.width}
             containerHeight={dims.height}
           />
           <Legend lens={lens} />
+          {lensId === 'tracking' && (toggles['vessels'] || toggles['missile-events']) && (
+            <div className="absolute bottom-2 right-2 z-10 max-w-xs px-2 py-1.5 border rounded-[2px]"
+              style={{ background: 'rgba(22, 21, 17, 0.92)', borderColor: 'var(--border)' }}>
+              <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-3)' }}>
+                {toggles['vessels'] && 'Vessels: global AIS needs a feed key; per-hotspot AIS is on the Conflict lens. '}
+                {toggles['missile-events'] && 'Missile events are report-derived from corroborated OSINT, not a live sensor; none in the current window.'}
+              </p>
+            </div>
+          )}
           {lens.status === 'pending-source' && (
             <div
               className="absolute inset-x-0 top-0 z-10 flex justify-center pointer-events-none"

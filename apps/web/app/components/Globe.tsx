@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
-import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR } from '../lib/tokens'
+import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
+import { MILITARY_SITES, type MilitarySite } from '../lib/military-sites'
 import { COUNTRY_FEATURES, toNeName, type CountryPolyFeature } from '../lib/countries'
 import type { LensId } from '../lib/lenses'
 
@@ -29,6 +30,18 @@ export interface Outbreak {
   publishedAt: string
   url: string
   source: string
+}
+
+export interface Aircraft {
+  icao24: string
+  callsign: string
+  originCountry: string
+  lat: number
+  lng: number
+  baroAltitudeM: number | null
+  velocityMs: number | null
+  trueTrack: number | null
+  onGround: boolean
 }
 
 export interface ConflictPoint {
@@ -61,6 +74,7 @@ interface GlobeProps {
   events: EventBlip[]
   hazards: HazardPoint[]
   outbreaks: Outbreak[]
+  aircraft: Aircraft[]
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
   conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
@@ -69,6 +83,8 @@ interface GlobeProps {
   onSelectHotspot: (h: Hotspot) => void
   onSelectHazard: (h: HazardPoint) => void
   onSelectOutbreak: (o: Outbreak) => void
+  onSelectAircraft: (a: Aircraft) => void
+  onSelectMilitarySite: (s: MilitarySite) => void
   containerWidth?: number
   containerHeight?: number
 }
@@ -159,6 +175,33 @@ function outbreakMarkers(o: Outbreak, onSelect: (o: Outbreak) => void): Marker[]
   }))
 }
 
+function aircraftMarker(a: Aircraft, onSelect: (a: Aircraft) => void): Marker {
+  const alt = a.baroAltitudeM !== null ? `${Math.round(a.baroAltitudeM)} m` : 'alt n/a'
+  return {
+    lat: a.lat,
+    lng: a.lng,
+    color: AIRCRAFT_COLOR,
+    radius: 0.16,
+    label: tooltip(a.callsign || a.icao24, `${a.originCountry} · ${alt}`),
+    onClick: () => onSelect(a),
+    flyTo: false,
+  }
+}
+
+function makeMilitaryEl(s: MilitarySite, onClick: (s: MilitarySite) => void): HTMLElement {
+  const el = document.createElement('button')
+  el.setAttribute('aria-label', `Military site: ${s.name}`)
+  el.title = s.name
+  el.style.cssText = 'background:transparent;border:0;padding:3px;cursor:pointer;pointer-events:auto'
+  const inner = document.createElement('span')
+  inner.style.cssText =
+    'display:block;width:9px;height:9px;border:1.5px solid var(--accent);' +
+    'box-shadow:0 0 0 1px rgba(0,0,0,0.55)'
+  el.appendChild(inner)
+  el.onclick = ev => { ev.stopPropagation(); onClick(s) }
+  return el
+}
+
 const HAZARD_GLYPH_STYLE: Record<string, string> = {
   volcano: 'width:11px;height:11px;border:1.5px solid {c}',
   tsunami: 'width:12px;height:12px;border:1.5px solid {c};border-radius:50%',
@@ -197,8 +240,9 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, hazards, outbreaks, conflictByNeName, selectedCountryName,
+  lens, toggles, conflicts, events, hazards, outbreaks, aircraft, conflictByNeName, selectedCountryName,
   onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard, onSelectOutbreak,
+  onSelectAircraft, onSelectMilitarySite,
   containerWidth, containerHeight,
 }: GlobeProps) {
   const globeRef = useRef<any>(null)
@@ -288,9 +332,12 @@ export default function Globe({
   const isConflictLens = lens === 'conflict'
   const isDisasterLens = lens === 'disasters'
   const isContaminationLens = lens === 'contamination'
+  const isTrackingLens = lens === 'tracking'
   const showEvents = isConflictLens && toggles['events'] !== false
   const showHotspots = isConflictLens && toggles['hotspots'] !== false
   const showOutbreaks = isContaminationLens && toggles['outbreaks'] !== false
+  const showAircraft = isTrackingLens && toggles['aircraft'] !== false
+  const showMilitarySites = isTrackingLens && toggles['military-sites'] !== false
 
   const pointMarkers: Marker[] = useMemo(() => {
     if (showEvents) return events.map(e => eventMarker(e, onSelectEvent))
@@ -298,8 +345,9 @@ export default function Globe({
       return hazards.filter(h => h.kind === 'earthquake').map(h => quakeMarker(h, onSelectHazard))
     }
     if (showOutbreaks) return outbreaks.flatMap(o => outbreakMarkers(o, onSelectOutbreak))
+    if (showAircraft) return aircraft.map(a => aircraftMarker(a, onSelectAircraft))
     return []
-  }, [showEvents, isDisasterLens, showOutbreaks, events, hazards, outbreaks, toggles, onSelectEvent, onSelectHazard, onSelectOutbreak])
+  }, [showEvents, isDisasterLens, showOutbreaks, showAircraft, events, hazards, outbreaks, aircraft, toggles, onSelectEvent, onSelectHazard, onSelectOutbreak, onSelectAircraft])
 
   // Pulse rings: S4+ events, red-alert hazards, or all outbreak points
   const ringMarkers: Marker[] = useMemo(() => {
@@ -319,19 +367,21 @@ export default function Globe({
     [toggles]
   )
 
-  // DOM markers: hotspot diamonds (conflict) or non-quake hazard glyphs (disasters)
+  // DOM markers: hotspot diamonds, non-quake hazard glyphs, or military squares
   const htmlData: object[] = useMemo(() => {
     if (showHotspots) return HOTSPOTS as unknown as object[]
     if (isDisasterLens) return hazards.filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
+    if (showMilitarySites) return MILITARY_SITES as unknown as object[]
     return []
-  }, [showHotspots, isDisasterLens, hazards, hazardToggleOn])
+  }, [showHotspots, isDisasterLens, showMilitarySites, hazards, hazardToggleOn])
 
   const makeHtmlEl = useCallback(
-    (d: object) =>
-      isDisasterLens
-        ? makeHazardEl(d as HazardPoint, onSelectHazard)
-        : makeHotspotEl(d as Hotspot, onSelectHotspot),
-    [isDisasterLens, onSelectHazard, onSelectHotspot]
+    (d: object) => {
+      if (isDisasterLens) return makeHazardEl(d as HazardPoint, onSelectHazard)
+      if (isTrackingLens) return makeMilitaryEl(d as MilitarySite, onSelectMilitarySite)
+      return makeHotspotEl(d as Hotspot, onSelectHotspot)
+    },
+    [isDisasterLens, isTrackingLens, onSelectHazard, onSelectMilitarySite, onSelectHotspot]
   )
 
   // NE polygon names with an active outbreak (country spellings resolved)

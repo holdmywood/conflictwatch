@@ -58,3 +58,8 @@ export const HAZARD_COLOR = '#4fb3a6'
 /* Contamination channel: muted orchid — distinct from severity (warm),
    forecast (blue) and hazard (teal). */
 export const OUTBREAK_COLOR = '#b07ab0'
+
+/* Tracking channel: steel blue for aircraft, kept clearly cooler/greyer than
+   the forecast blue and away from every other channel. Military assets use
+   the bronze accent so they read as the highlighted subset. */
+export const AIRCRAFT_COLOR = '#8a9bb0'
