@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { scoreThreat, toEventType, scoreConfidence } from './score.js'
+import { scoreThreat, toEventType, scoreConfidence, computeSourceBreadth } from './score.js'
 
 describe('scoreThreat', () => {
   it('rates armed conflict (19) as 5', () => {
@@ -51,5 +51,17 @@ describe('scoreConfidence', () => {
   })
   it('does not collapse "Japan Times" as AP wire', () => {
     expect(scoreConfidence(['Japan Times', 'BBC'])).toBe('medium') // 2 distinct, not collapsed to 1
+  })
+})
+
+describe('computeSourceBreadth', () => {
+  it('counts distinct canonical sources', () => {
+    expect(computeSourceBreadth(['Reuters', 'BBC', 'Al Jazeera'])).toBe(3)
+  })
+  it('collapses wire syndication into one confirmation', () => {
+    expect(computeSourceBreadth(['Reuters UK', 'Reuters India', 'reuters.com'])).toBe(1)
+  })
+  it('returns 0 for no sources', () => {
+    expect(computeSourceBreadth([])).toBe(0)
   })
 })

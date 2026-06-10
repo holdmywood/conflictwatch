@@ -67,3 +67,10 @@ export function scoreConfidence(sourceNames: string[]): 'low' | 'medium' | 'high
   if (distinct.size === 2) return 'medium'
   return 'low'
 }
+
+// Independent-source count with wire syndication collapsed — the same
+// canonicalization scoreConfidence uses, so confidence and breadth agree
+// on what counts as "independent".
+export function computeSourceBreadth(sourceNames: string[]): number {
+  return new Set(sourceNames.map(canonicalSourceName)).size
+}

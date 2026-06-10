@@ -158,7 +158,9 @@ async function main() {
             eventTempo: features.eventTempo,
             severitySlope: features.severitySlope,
             spreadLocations: features.spreadLocations,
-            sourceBreadth: 0, // not derivable from historical event payload
+            sourceBreadth: 0, // NOT DERIVABLE for historical episodes — EventSource rows predate
+            // syndication tracking. Live signals compute the real value; train-model
+            // must treat this column as uninformative for backfilled rows.
             actorCount: features.actorCount,
             geographyClass: '', // not derivable from historical event payload
             actorTypes: [], // not derivable from historical event payload

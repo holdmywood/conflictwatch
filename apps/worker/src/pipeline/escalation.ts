@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { prisma } from '@conflictwatch/db'
 import { snapshotEpisode, logCalibration } from '../ai/episode-logger.js'
 import { computePEscalation } from '../ai/probability-model.js'
+import { computeSourceBreadth } from './score.js'
 
 const client = new Anthropic()
 
@@ -69,7 +70,7 @@ export function computeTrendFeatures(
     eventTempo: Math.round(eventTempo * 10) / 10,
     severitySlope: Math.round(severitySlope * 10) / 10,
     spreadLocations,
-    sourceBreadth: 0, // filled by caller from trust data
+    sourceBreadth: 0, // computed from EventSource rows in runEscalationPass
     actorCount: actors.size,
   }
 }
@@ -130,6 +131,15 @@ export async function runEscalationPass(conflictId: string): Promise<string | nu
   if (events.length < MIN_EVENTS_FOR_PASS) return null
 
   const features = computeTrendFeatures(conflictId, events, 7)
+
+  // Real independent-source breadth across the window's events
+  // (wire syndication collapsed). Part of the signal's provenance —
+  // must reflect what was actually computed, never a placeholder.
+  const windowSources = await prisma.eventSource.findMany({
+    where: { eventId: { in: events.map(e => e.id) } },
+    select: { name: true },
+  })
+  features.sourceBreadth = computeSourceBreadth(windowSources.map(s => s.name))
 
   const userPrompt =
     `Conflict ID: ${conflictId}\n` +

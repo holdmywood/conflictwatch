@@ -13,10 +13,13 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
+const mockSourceFindMany = vi.fn().mockResolvedValue([])
+
 vi.mock('@conflictwatch/db', () => ({
   prisma: {
     escalationSignal: { create: mockSignalCreate, findFirst: mockSignalFindFirst },
     event: { findMany: mockEventFindMany },
+    eventSource: { findMany: mockSourceFindMany },
   },
 }))
 
@@ -113,6 +116,25 @@ describe('runEscalationPass', () => {
     await runEscalationPass('conflict-ua')
     expect(mockSnapshotEpisode).toHaveBeenCalledWith(
       expect.objectContaining({ conflictId: 'conflict-ua' })
+    )
+  })
+
+  it('computes real sourceBreadth from the window events\' sources', async () => {
+    mockSourceFindMany.mockResolvedValue([
+      { name: 'Reuters' }, { name: 'Reuters India' }, // collapses to 1
+      { name: 'BBC News' },
+      { name: 'Al Jazeera' },
+    ])
+    await runEscalationPass('conflict-ua')
+    expect(mockSnapshotEpisode).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBreadth: 3 })
+    )
+    expect(mockSignalCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          triggeringFeatures: expect.objectContaining({ sourceBreadth: 3 }),
+        }),
+      })
     )
   })
 
