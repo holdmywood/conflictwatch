@@ -211,7 +211,7 @@ export default function GlobePage() {
           </Panel>
         </div>
         <div className="min-h-0 overflow-hidden">
-          <DetailPanel selection={selection} signals={signals} situationLines={situationLines} />
+          <DetailPanel selection={selection} signals={signals} situationLines={situationLines} blips={blips} />
         </div>
       </div>
 
@@ -226,7 +226,7 @@ export default function GlobePage() {
             hideHeader
           />
         </Panel>
-        <DetailPanel selection={selection} signals={signals} situationLines={situationLines} />
+        <DetailPanel selection={selection} signals={signals} situationLines={situationLines} blips={blips} />
       </div>
     </TerminalShell>
   )

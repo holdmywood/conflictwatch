@@ -15,7 +15,8 @@
     "react-dom": "19.2.4",
     "react-globe.gl": "^2.27.2",
     "topojson-client": "^3.1.0",
-    "world-atlas": "^2.0.2"
+    "world-atlas": "^2.0.2",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -24,6 +25,7 @@
     "@types/react-dom": "^19",
     "@types/topojson-client": "^3.1.5",
     "@types/topojson-specification": "^1.0.5",
+    "@types/ws": "^8.18.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

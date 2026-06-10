@@ -25,12 +25,14 @@ interface DetailPanelProps {
   signals: Map<string, Signal>
   /** Situation line per conflict id, from the conflicts payload. */
   situationLines: Map<string, string>
+  /** Recent event blips (for hotspot proximity lists). */
+  blips?: EventBlip[]
 }
 
 const TABS: Record<Selection['type'], string[]> = {
   country: ['Assessment', 'Events', 'Exposure', 'Provenance'],
   event: ['Event', 'Sources'],
-  hotspot: ['Zone', 'Maritime'],
+  hotspot: ['Zone', 'Exposure', 'Events', 'Maritime'],
 }
 
 function selectionKey(sel: Selection): string {
@@ -39,7 +41,7 @@ function selectionKey(sel: Selection): string {
   return `hotspot:${sel.hotspot.zone}`
 }
 
-export default function DetailPanel({ selection, signals, situationLines }: DetailPanelProps) {
+export default function DetailPanel({ selection, signals, situationLines, blips = [] }: DetailPanelProps) {
   const [tab, setTab] = useState(0)
   const [key, setKey] = useState('')
 
@@ -98,7 +100,7 @@ export default function DetailPanel({ selection, signals, situationLines }: Deta
             />
           )}
           {selection.type === 'event' && <EventTabs tab={tabs[tab]} event={selection.event} />}
-          {selection.type === 'hotspot' && <HotspotTabs tab={tabs[tab]} hotspot={selection.hotspot} />}
+          {selection.type === 'hotspot' && <HotspotTabs tab={tabs[tab]} hotspot={selection.hotspot} blips={blips} />}
         </div>
       </div>
     </Panel>
@@ -269,7 +271,19 @@ function EventTabs({ tab, event }: { tab: string; event: EventBlip }) {
 
 /* ── Hotspot ──────────────────────────────────────────────────────────────── */
 
-function HotspotTabs({ tab, hotspot }: { tab: string; hotspot: Hotspot }) {
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(a))
+}
+
+const HOTSPOT_EVENT_RADIUS_KM = 500
+
+function HotspotTabs({ tab, hotspot, blips }: { tab: string; hotspot: Hotspot; blips: EventBlip[] }) {
   if (tab === 'Zone') {
     return (
       <div className="p-2.5 space-y-1.5">
@@ -286,15 +300,147 @@ function HotspotTabs({ tab, hotspot }: { tab: string; hotspot: Hotspot }) {
       </div>
     )
   }
-  // Maritime — honest placeholder until an AIS key is configured
-  return (
-    <div className="p-2.5">
-      <div className="label mb-1">Live maritime</div>
-      <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-3)' }}>
-        Vessel traffic requires an AIS feed key (MarineTraffic or AISStream).
-        No key is configured — no vessel data is shown. Nothing on this tab is
-        simulated.
+
+  if (tab === 'Exposure') return <ZoneExposureList zone={hotspot.zone} />
+
+  if (tab === 'Events') {
+    const nearby = blips
+      .filter(b => haversineKm(b.lat, b.lng, hotspot.lat, hotspot.lng) <= HOTSPOT_EVENT_RADIUS_KM)
+      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+    if (nearby.length === 0) {
+      return (
+        <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>
+          No corroborated events within {HOTSPOT_EVENT_RADIUS_KM} km in the current feed window.
+        </p>
+      )
+    }
+    return (
+      <ol className="divide-y" style={{ borderColor: 'var(--border)' }}>
+        {nearby.map(e => (
+          <li key={e.id} className="px-2.5 py-2">
+            <div className="flex items-baseline gap-2">
+              <SevMark level={e.severity} />
+              <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>{fmtUTC(e.publishedAt)}</span>
+              <span className="tabnum text-[10px] ml-auto" style={{ color: 'var(--text-3)' }}>
+                {Math.round(haversineKm(e.lat, e.lng, hotspot.lat, hotspot.lng))} km
+              </span>
+            </div>
+            <p className="text-[12px] leading-snug mt-0.5" style={{ color: 'var(--text)' }}>{e.title}</p>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+
+  return <MaritimeTab zone={hotspot.zone} />
+}
+
+function ZoneExposureList({ zone }: { zone: string }) {
+  const [data, setData] = useState<Array<{
+    instrumentLabel: string; assetClass: string; linkType: string; weight: number; reviewStatus: string
+  }> | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setData(null)
+    setError(false)
+    fetch(`/api/zone/${zone}/exposures`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => setData(d.exposures ?? []))
+      .catch(() => setError(true))
+  }, [zone])
+
+  if (error) return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Exposure service unreachable.</p>
+  if (data === null) return <p className="tabnum text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Loading…</p>
+  if (data.length === 0) {
+    return (
+      <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>
+        No exposure linkages curated for this zone yet. Candidates are tracked in the curation queue.
       </p>
+    )
+  }
+
+  return (
+    <ol className="divide-y" style={{ borderColor: 'var(--border)' }}>
+      {data.map((e, i) => (
+        <li key={i} className="px-2.5 py-1.5">
+          <div className="flex items-baseline gap-2">
+            <span className="tabnum text-[11px] w-9 text-right shrink-0" style={{ color: 'var(--text)' }}>{fmtPct(e.weight)}</span>
+            <span className="text-[11px]" style={{ color: 'var(--text)' }}>{e.instrumentLabel}</span>
+            <span className="tabnum text-[10px] ml-auto uppercase shrink-0" style={{ color: 'var(--text-3)' }}>{e.linkType}</span>
+          </div>
+          {e.reviewStatus !== 'approved' && (
+            <p className="tabnum text-[9px] mt-0.5" style={{ color: 'var(--text-3)' }}>weight unreviewed</p>
+          )}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function MaritimeTab({ zone }: { zone: string }) {
+  const [data, setData] = useState<{
+    configured: boolean
+    vessels: Array<{ mmsi: string; name: string; lat: number; lng: number; speedKnots: number | null; military: boolean }>
+    asOf?: string
+    error?: string
+  } | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setData(null)
+    setFailed(false)
+    fetch(`/api/maritime/${zone}`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(setData)
+      .catch(() => setFailed(true))
+  }, [zone])
+
+  if (failed) return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Maritime service unreachable.</p>
+  if (data === null) return <p className="tabnum text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Collecting AIS snapshot…</p>
+
+  if (!data.configured) {
+    return (
+      <div className="p-2.5">
+        <div className="label mb-1">Live maritime</div>
+        <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-3)' }}>
+          Vessel traffic requires an AIS feed key (set AISSTREAM_API_KEY).
+          No key is configured — no vessel data is shown. Nothing on this tab is simulated.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col min-h-0">
+      <div className="flex items-baseline justify-between px-2.5 pt-2 pb-1">
+        <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
+          {data.vessels.length} vessels · as of {data.asOf ? fmtUTC(data.asOf) : '—'}
+        </span>
+        {data.error && <span className="tabnum text-[10px]" style={{ color: 'var(--stale)' }}>partial</span>}
+      </div>
+      <p className="text-[10px] px-2.5 pb-1.5" style={{ color: 'var(--text-3)' }}>
+        Military flag from AIS ship type 35 — naval vessels often do not broadcast; coverage is partial.
+      </p>
+      {data.vessels.length === 0 ? (
+        <p className="text-[11px] px-2.5 pb-2" style={{ color: 'var(--text-3)' }}>
+          No AIS position reports received in the collection window.
+        </p>
+      ) : (
+        <ol className="divide-y" style={{ borderColor: 'var(--border)' }}>
+          {data.vessels.map(v => (
+            <li key={v.mmsi} className="flex items-baseline gap-2 px-2.5 py-1">
+              <span className="text-[11px] truncate" style={{ color: v.military ? 'var(--accent)' : 'var(--text)' }}>
+                {v.name || `MMSI ${v.mmsi}`}
+              </span>
+              {v.military && <span className="label shrink-0" style={{ color: 'var(--accent)' }}>military</span>}
+              <span className="tabnum text-[10px] ml-auto shrink-0" style={{ color: 'var(--text-3)' }}>
+                {v.speedKnots !== null ? `${v.speedKnots.toFixed(1)} kn` : '—'}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   )
 }
