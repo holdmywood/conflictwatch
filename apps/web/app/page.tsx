@@ -10,6 +10,7 @@ import DetailPanel, { type Selection } from './components/DetailPanel'
 import LensSwitcher from './components/globe/LensSwitcher'
 import Legend from './components/globe/Legend'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
+import { bindConflictsToCountries } from './lib/countries'
 import type { Signal } from './components/SignalCard'
 import type { ConflictPoint, EventBlip } from './components/Globe'
 
@@ -112,9 +113,17 @@ export default function GlobePage() {
     [conflicts]
   )
 
+  // Deterministic country binding: point-in-polygon on conflict coordinates,
+  // so polygon clicks, watchlist selection, and the selected-country fill all
+  // agree on the same Natural Earth name.
+  const { neNameByConflictId, conflictByNeName } = useMemo(
+    () => bindConflictsToCountries(conflicts),
+    [conflicts]
+  )
+
   const selectConflictById = (id: string) => {
     const c = conflicts.find(x => x.id === id)
-    if (c) setSelection({ type: 'country', name: c.name, conflict: c })
+    if (c) setSelection({ type: 'country', name: neNameByConflictId.get(c.id) ?? c.name, conflict: c })
   }
 
   const globePane = (
@@ -150,6 +159,7 @@ export default function GlobePage() {
             toggles={toggles}
             conflicts={conflicts}
             events={blips}
+            conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
             onSelectCountry={c => setSelection({ type: 'country', name: c.name, conflict: c.conflict })}
             onSelectEvent={e => setSelection({ type: 'event', event: e })}

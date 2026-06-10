@@ -2,11 +2,9 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
-import { feature } from 'topojson-client'
-import type { Topology, GeometryCollection } from 'topojson-specification'
-import countriesTopo from 'world-atlas/countries-110m.json'
 import { sevColor } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
+import { COUNTRY_FEATURES, type CountryPolyFeature } from '../lib/countries'
 import type { LensId } from '../lib/lenses'
 
 export interface ConflictPoint {
@@ -37,6 +35,8 @@ interface GlobeProps {
   toggles: Record<string, boolean>
   conflicts: ConflictPoint[]
   events: EventBlip[]
+  /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
+  conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
   onSelectCountry: (c: CountryFeature) => void
   onSelectEvent: (e: EventBlip) => void
@@ -45,40 +45,7 @@ interface GlobeProps {
   containerHeight?: number
 }
 
-// ── Country polygons (Natural Earth admin-0 via world-atlas) ─────────────────
-
-interface PolyFeature {
-  type: 'Feature'
-  properties: { name: string }
-  geometry: object
-}
-
-const COUNTRY_FEATURES: PolyFeature[] = (() => {
-  const topo = countriesTopo as unknown as Topology<{ countries: GeometryCollection<{ name: string }> }>
-  const fc = feature(topo, topo.objects.countries) as unknown as { features: PolyFeature[] }
-  return fc.features
-})()
-
-// Natural Earth names ↔ conflict names derived from GDELT ActionGeo strings.
-// GDELT yields plain English short names; NE uses some long forms.
-const NE_NAME_TO_GDELT: Record<string, string> = {
-  'United States of America': 'United States',
-  'Dem. Rep. Congo': 'Democratic Republic of the Congo',
-  'Central African Rep.': 'Central African Republic',
-  'S. Sudan': 'South Sudan',
-  'Bosnia and Herz.': 'Bosnia and Herzegovina',
-  'Czechia': 'Czech Republic',
-  'Dominican Rep.': 'Dominican Republic',
-  'Eq. Guinea': 'Equatorial Guinea',
-  "Côte d'Ivoire": 'Ivory Coast',
-  'Myanmar': 'Burma',
-  'North Korea': 'North Korea',
-  'South Korea': 'South Korea',
-}
-
-function gdeltName(neName: string): string {
-  return NE_NAME_TO_GDELT[neName] ?? neName
-}
+type PolyFeature = CountryPolyFeature
 
 // ── Admin-1 borders, lazy-loaded on zoom ─────────────────────────────────────
 // Natural Earth 50m admin-1 boundary lines (~4 MB) — fetched once, only when
@@ -133,7 +100,7 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, selectedCountryName,
+  lens, toggles, conflicts, events, conflictByNeName, selectedCountryName,
   onSelectCountry, onSelectEvent, onSelectHotspot,
   containerWidth, containerHeight,
 }: GlobeProps) {
@@ -188,18 +155,10 @@ export default function Globe({
     return () => controls.removeEventListener('change', onChange)
   }, [])
 
-  const conflictByCountryName = useMemo(() => {
-    const map = new Map<string, ConflictPoint>()
-    for (const c of conflicts) map.set(c.name.toLowerCase(), c)
-    return map
-  }, [conflicts])
-
   const resolveConflict = useCallback(
-    (poly: object): ConflictPoint | null => {
-      const name = gdeltName((poly as PolyFeature).properties.name)
-      return conflictByCountryName.get(name.toLowerCase()) ?? null
-    },
-    [conflictByCountryName]
+    (poly: object): ConflictPoint | null =>
+      conflictByNeName.get((poly as PolyFeature).properties.name) ?? null,
+    [conflictByNeName]
   )
 
   const handlePolygonClick = useCallback(
@@ -208,7 +167,7 @@ export default function Globe({
       const globe = globeRef.current
       if (globe) globe.controls().autoRotate = false
       onSelectCountry({
-        name: gdeltName((poly as PolyFeature).properties.name),
+        name: (poly as PolyFeature).properties.name,
         conflict: resolveConflict(poly),
       })
     },
@@ -247,7 +206,7 @@ export default function Globe({
       const isHover = poly === hoverPoly
       const isSelected =
         selectedCountryName !== null &&
-        gdeltName((poly as PolyFeature).properties.name) === selectedCountryName
+        (poly as PolyFeature).properties.name === selectedCountryName
       const conflict = isConflictLens ? resolveConflict(poly) : null
       if (isSelected) return 'rgba(200, 162, 74, 0.28)'
       if (isHover) return 'rgba(232, 229, 220, 0.14)'
