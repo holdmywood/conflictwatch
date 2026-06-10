@@ -99,7 +99,9 @@ export default function StatusBar() {
       )}
       {cal && (
         <Cell label="model">
-          {cal.modelVersion}
+          <a href="/methodology" className="hover:underline" title="Methodology & calibration">
+            {cal.modelVersion}
+          </a>
           {cal.meanBrierScore !== null && ` · brier ${cal.meanBrierScore.toFixed(4)}`}
         </Cell>
       )}

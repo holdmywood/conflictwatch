@@ -6,12 +6,12 @@ import { usePathname } from 'next/navigation'
 import StatusBar from './StatusBar'
 
 const NAV = [
-  { href: '/', label: 'Overview' },
-  { href: '/signals', label: 'Signals' },
-  { href: '/feed', label: 'Feed' },
-  { href: '/predictions', label: 'Forecasts' },
-  { href: '/report', label: 'Report' },
-  { href: '/methodology', label: 'Methods' },
+  { href: '/', label: 'Globe' },
+  { href: '/news', label: 'Latest news' },
+  { href: '/feed', label: 'Intel feed' },
+  { href: '/predictions', label: 'Predictions' },
+  { href: '/report', label: 'Daily report' },
+  { href: '/dashboard', label: 'Dashboard' },
 ] as const
 
 interface TerminalShellProps {
