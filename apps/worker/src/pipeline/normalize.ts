@@ -120,6 +120,17 @@ export interface MentionRow {
   publishedAt: Date
 }
 
+// Curation telemetry: rows that passed every noise gate but had no usable
+// coordinates (no geo and no centroid for the country code). A rising count
+// means the centroid table needs rows added — visible loss, not silent.
+let geoDropCount = 0
+
+export function getAndResetGeoDropCount(): number {
+  const n = geoDropCount
+  geoDropCount = 0
+  return n
+}
+
 export function parseEventRow(line: string): EventRow | null {
   const cols = line.split('\t')
 
@@ -152,7 +163,10 @@ export function parseEventRow(line: string): EventRow | null {
   const rawLng = parseFloat(cols[E.ACTION_GEO_LNG] ?? '0')
   const countryCode = cols[E.ACTION_GEO_COUNTRY_CODE] ?? ''
   const coords = resolveCoords(rawLat, rawLng, countryCode)
-  if (!coords) return null
+  if (!coords) {
+    geoDropCount++
+    return null
+  }
 
   const dateStr = cols[E.DATE_ADDED] ?? ''
   const publishedAt = parseDateAdded(dateStr)

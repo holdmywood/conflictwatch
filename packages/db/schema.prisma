@@ -265,9 +265,17 @@ model ExposureLink {
   notes           String   @default("")
   version         Int      @default(1)
   createdAt       DateTime @default(now())
+  // Editorial provenance — exposure linkages are curated judgments, never
+  // fabricated. Every row says where it came from and whether a human
+  // confirmed it. Unreviewed rows must be visually flagged downstream.
+  provenance      String   @default("") // citation/justification for the linkage + weight
+  addedBy         String   @default("seed") // 'seed' | analyst identifier
+  reviewStatus    String   @default("unreviewed") // 'unreviewed' | 'approved'
+  reviewedAt      DateTime?
 
   @@index([zone])
   @@index([instrument])
+  @@index([reviewStatus])
   @@unique([zone, instrument])
 }
 

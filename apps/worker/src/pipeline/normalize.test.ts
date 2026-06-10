@@ -308,3 +308,31 @@ describe('joinEventsAndMentions', () => {
     expect(results).toHaveLength(0)
   })
 })
+
+describe('geo drop counter', () => {
+  it('counts rows dropped for unresolvable coordinates, and resets on read', async () => {
+    const { getAndResetGeoDropCount } = await import('./normalize.js')
+    getAndResetGeoDropCount() // clear any prior state
+
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[56] = '0'   // ActionGeo_Lat
+    row[57] = '0'   // ActionGeo_Long
+    row[53] = 'XX'  // unknown country — no centroid fallback
+    parseEventRow(row.join('\t'))
+    parseEventRow(row.join('\t'))
+
+    expect(getAndResetGeoDropCount()).toBe(2)
+    expect(getAndResetGeoDropCount()).toBe(0)
+  })
+
+  it('does not count rows dropped by noise gates', async () => {
+    const { getAndResetGeoDropCount } = await import('./normalize.js')
+    getAndResetGeoDropCount()
+
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[28] = '12' // CAMEO gate rejects before geo resolution
+    parseEventRow(row.join('\t'))
+
+    expect(getAndResetGeoDropCount()).toBe(0)
+  })
+})

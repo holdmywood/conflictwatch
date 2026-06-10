@@ -24,6 +24,7 @@ import { resolveOutcomes } from './ai/episode-logger.js'
 import { evaluateWatchlistRules } from './jobs/evaluateWatchlistRules.js'
 import { checkStaleness } from './jobs/staleness-alert.js'
 import { createCycleGuard } from './lib/run-guard.js'
+import { getAndResetGeoDropCount } from './pipeline/normalize.js'
 import type { NormalizedEvent } from './types.js'
 
 const gdelt = new GdeltSource()
@@ -203,11 +204,15 @@ async function runIngestionCycle(): Promise<void> {
     }
 
     sourcesOk = 1
+    const geoDrops = getAndResetGeoDropCount()
+    if (geoDrops > 0) {
+      console.warn(`[worker] ${geoDrops} rows dropped for unresolvable coordinates — centroid table may need curation`)
+    }
     console.log(
       `[worker] done in ${Date.now() - start}ms — ` +
       `${newCount} new events, ${accruedSources} sources accrued, ` +
       `${discardedNoFetch} no-fetch, ${discardedExcluded} excluded, ` +
-      `${enrichQueued} over-cap, ${classifyCalls} classify calls`
+      `${enrichQueued} over-cap, ${classifyCalls} classify calls, ${geoDrops} geo-drops`
     )
   } catch (err) {
     sourcesFailed = 1
