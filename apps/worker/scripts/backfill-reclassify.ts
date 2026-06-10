@@ -106,15 +106,26 @@ async function main() {
   const newlyClassifiedIds: string[] = []
 
   // Dropped events are DELETED, matching live-pipeline behavior — a pre-gate
-  // event whose article can't be fetched or that the classifier excludes is
-  // noise that would otherwise be re-fetched on every run, forever.
+  // event whose article can't be fetched or that the classifier EXPLICITLY
+  // excludes is noise that would otherwise be re-fetched on every run.
+  // A classify API failure is NOT an exclusion verdict: those events are
+  // skipped (left unclassified) and the run aborts after repeated failures,
+  // because a dead API key must never read as "everything is noise".
   const dropEvent = async (id: string) => {
     await prisma.eventSource.deleteMany({ where: { eventId: id } })
     await prisma.event.delete({ where: { id } })
     dropped++
   }
 
+  let classifyFailures = 0
+  const MAX_CLASSIFY_FAILURES = 5
+
   for (const event of unclassified) {
+    if (classifyFailures >= MAX_CLASSIFY_FAILURES) {
+      console.error(`[backfill] aborting: ${classifyFailures} consecutive classify failures — check ANTHROPIC_API_KEY/credits`)
+      break
+    }
+
     const urls = event.sources.map(s => s.url)
     const lead = await fetchBestLeadText(urls)
     if (!lead) { await dropEvent(event.id); continue }
@@ -126,7 +137,9 @@ async function main() {
       sourceBreadth: urls.length,
     })
 
-    if (!result || !result.include) { await dropEvent(event.id); continue }
+    if (!result) { classifyFailures++; continue } // API failure — skip, do not delete
+    classifyFailures = 0
+    if (!result.include) { await dropEvent(event.id); continue }
 
     await prisma.event.update({
       where: { id: event.id },
@@ -144,6 +157,15 @@ async function main() {
     newlyClassifiedIds.push(event.id)
   }
   console.log(`[backfill] Step 3: classified ${classified}, dropped ${dropped}`)
+
+  // Hard stop after classify failures: steps 4–6 assume step 3 produced an
+  // honest classified/unclassified split. Step 5 in particular deletes
+  // conflicts with no classified events — running it after an API outage
+  // would delete everything that merely couldn't be classified.
+  if (classifyFailures >= MAX_CLASSIFY_FAILURES) {
+    console.error('[backfill] skipping steps 4–6 after classify failures; rerun once the API is reachable')
+    process.exit(1)
+  }
 
   // Step 4: recompute threat for all conflicts using AI severity
   const conflicts = await prisma.conflict.findMany({ select: { id: true, name: true } })

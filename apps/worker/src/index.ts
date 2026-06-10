@@ -33,6 +33,11 @@ const gdelt = new GdeltSource()
 // Events beyond this are queued for the next cycle.
 const MAX_ENRICH_PER_CYCLE = 20
 
+// Circuit breaker: after this many classify failures in one cycle, stop
+// attempting classifies (likely API outage / exhausted credits) and defer
+// the remaining clusters untouched.
+const MAX_CLASSIFY_FAILURES_PER_CYCLE = 5
+
 // Group normalized events by their GDELT cluster (globalEventId).
 function groupByCluster(events: NormalizedEvent[]): Map<string, NormalizedEvent[]> {
   const map = new Map<string, NormalizedEvent[]>()
@@ -87,6 +92,7 @@ async function runIngestionCycle(): Promise<void> {
     let accruedSources = 0
     let discardedNoFetch = 0
     let discardedExcluded = 0
+    let classifyFailures = 0
     let enrichQueued = 0
 
     for (const [clusterId, clusterEvents] of ordered) {
@@ -113,7 +119,7 @@ async function runIngestionCycle(): Promise<void> {
 
       // New cluster: fetch lead + classify (gated by cycle cap).
       // Over-cap clusters are queued for later cycles, not dropped.
-      if (classifyCalls >= MAX_ENRICH_PER_CYCLE) {
+      if (classifyCalls >= MAX_ENRICH_PER_CYCLE || classifyFailures >= MAX_CLASSIFY_FAILURES_PER_CYCLE) {
         enrichQueued++
         await enqueueCluster(clusterId, clusterEvents, (attemptsByCluster.get(clusterId) ?? 0) + 1)
           .catch(err => console.error(`[worker] enqueue failed for ${clusterId}:`, err))
@@ -140,12 +146,20 @@ async function runIngestionCycle(): Promise<void> {
       })
       classifyCalls++
 
-      if (!classify || !classify.include) {
+      if (!classify) {
+        // API/parse failure is NOT an exclusion verdict — defer the cluster
+        // and retry next cycle. Attempts are NOT incremented for failures, so
+        // an API outage cannot burn a cluster's retry budget; only over-cap
+        // deferrals count against MAX_ATTEMPTS.
+        classifyFailures++
+        await enqueueCluster(clusterId, clusterEvents, attemptsByCluster.get(clusterId) ?? 0)
+          .catch(err => console.error(`[worker] enqueue after classify failure failed for ${clusterId}:`, err))
+        continue
+      }
+      if (!classify.include) {
         discardedExcluded++
         if (fromQueue) await removePending(clusterId)
-        console.log(
-          `[worker] excluded cluster ${clusterId} — ${classify?.exclude_reason ?? 'classify failed'}`
-        )
+        console.log(`[worker] excluded cluster ${clusterId} — ${classify.exclude_reason ?? 'no reason given'}`)
         continue
       }
       if (fromQueue) await removePending(clusterId)
@@ -208,10 +222,17 @@ async function runIngestionCycle(): Promise<void> {
     if (geoDrops > 0) {
       console.warn(`[worker] ${geoDrops} rows dropped for unresolvable coordinates — centroid table may need curation`)
     }
+    if (classifyFailures > 0) {
+      console.error(
+        `[worker] ${classifyFailures} classify calls FAILED this cycle — ` +
+        'check ANTHROPIC_API_KEY/credits; affected clusters are deferred, not discarded'
+      )
+    }
     console.log(
       `[worker] done in ${Date.now() - start}ms — ` +
       `${newCount} new events, ${accruedSources} sources accrued, ` +
       `${discardedNoFetch} no-fetch, ${discardedExcluded} excluded, ` +
+      `${classifyFailures} classify-failed (deferred), ` +
       `${enrichQueued} over-cap, ${classifyCalls} classify calls, ${geoDrops} geo-drops`
     )
   } catch (err) {
