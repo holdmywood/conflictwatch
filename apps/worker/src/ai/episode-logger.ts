@@ -100,11 +100,15 @@ export async function resolveOutcomes(): Promise<void> {
     if (resolutionDue > now) continue // not yet past horizon
 
     const signal = record.signal
-    // Check if the conflict escalated: did threatLevel reach ≥4 in the horizon window?
+    // Escalation outcome: a severity ≥4 corroborated event whose *event time*
+    // (publishedAt) falls inside the horizon window. ingestedAt must not be
+    // used here — late ingestion of an old event would count hindsight as
+    // outcome, and the published methodology defines the outcome by event time.
+    // Resolution sees only what is in the DB at resolution time (forward-only).
     const escalationEvent = await prisma.event.findFirst({
       where: {
         conflictId: signal.targetId,
-        ingestedAt: {
+        publishedAt: {
           gte: signal.computedAt,
           lte: resolutionDue,
         },
