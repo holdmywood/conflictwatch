@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@conflictwatch/db'
 import Anthropic from '@anthropic-ai/sdk'
+import { rateLimit, clientKey } from '../../../../lib/rate-limit'
 
 const client = new Anthropic()
+
+// This route spends LLM budget on a cache miss — bound it per client and globally.
+const PER_CLIENT_LIMIT = 10   // per minute
+const GLOBAL_LIMIT = 60       // per minute, all clients
+const WINDOW_MS = 60_000
 
 const SYSTEM_PROMPT =
   `You are a conflict intelligence analyst. Summarize the key facts from this article in 3-4 sentences. ` +
@@ -42,10 +48,20 @@ async function summarizeWithHaiku(articleText: string, eventTitle: string): Prom
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+
+  const perClient = rateLimit(`summary:${clientKey(request)}`, PER_CLIENT_LIMIT, WINDOW_MS)
+  const global = rateLimit('summary:global', GLOBAL_LIMIT, WINDOW_MS)
+  if (!perClient.allowed || !global.allowed) {
+    const retryAfter = Math.max(perClient.retryAfterSeconds, global.retryAfterSeconds)
+    return NextResponse.json(
+      { error: 'Rate limit exceeded. Retry shortly.' },
+      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+    )
+  }
 
   const event = await prisma.event.findUnique({
     where: { id },

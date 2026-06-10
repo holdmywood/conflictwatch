@@ -1,4 +1,5 @@
 import { prisma } from '@conflictwatch/db'
+import { isSafeWebhookUrl } from '../lib/url-safety.js'
 
 // Evaluate all enabled WatchlistRules and fire alerts where thresholds are met.
 // Deduplicates: skips if an alert for this rule+conflict already fired within dedupWindowHours.
@@ -116,6 +117,15 @@ async function deliverAlert(
   rule: { webhookUrl: string | null; slackWebhookUrl: string | null },
 ): Promise<void> {
   const deliveryErrors: string[] = []
+
+  if (rule.webhookUrl && !isSafeWebhookUrl(rule.webhookUrl)) {
+    deliveryErrors.push('webhook: URL rejected (https to a public host required)')
+    rule = { ...rule, webhookUrl: null }
+  }
+  if (rule.slackWebhookUrl && !isSafeWebhookUrl(rule.slackWebhookUrl)) {
+    deliveryErrors.push('slack: URL rejected (https to a public host required)')
+    rule = { ...rule, slackWebhookUrl: null }
+  }
 
   if (rule.webhookUrl) {
     try {

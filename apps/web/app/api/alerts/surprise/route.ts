@@ -3,8 +3,10 @@ import { prisma } from '@conflictwatch/db'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const minScore = parseFloat(searchParams.get('minScore') ?? '3')
-  const limit = Math.min(100, parseInt(searchParams.get('limit') ?? '20', 10))
+  const parsedMinScore = parseFloat(searchParams.get('minScore') ?? '3')
+  const minScore = Number.isFinite(parsedMinScore) ? parsedMinScore : 3
+  const parsedLimit = parseInt(searchParams.get('limit') ?? '20', 10)
+  const limit = Number.isFinite(parsedLimit) ? Math.min(100, Math.max(1, parsedLimit)) : 20
 
   const alerts = await prisma.event.findMany({
     where: {

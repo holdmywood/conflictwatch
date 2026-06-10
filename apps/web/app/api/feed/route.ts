@@ -21,13 +21,19 @@ export async function GET(request: Request) {
 
   const where: Prisma.EventWhereInput = {}
 
+  const fromDate = from ? new Date(from) : null
+  const toDate = to ? toEndOfDay(to) : null
+  if ((fromDate && isNaN(fromDate.getTime())) || (toDate && isNaN(toDate.getTime()))) {
+    return NextResponse.json({ error: 'Invalid from/to date (YYYY-MM-DD required).' }, { status: 400 })
+  }
+
   if (region)     where.region     = { contains: region, mode: 'insensitive' }
   if (eventType)  where.eventType  = eventType
   if (confidence) where.confidence = confidence
-  if (from || to) {
+  if (fromDate || toDate) {
     where.publishedAt = {
-      ...(from ? { gte: new Date(from) } : {}),
-      ...(to   ? { lte: toEndOfDay(to) } : {}),
+      ...(fromDate ? { gte: fromDate } : {}),
+      ...(toDate   ? { lte: toDate } : {}),
     }
   }
 
