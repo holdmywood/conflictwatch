@@ -10,7 +10,7 @@ vi.mock('@conflictwatch/db', () => ({
   },
 }))
 
-const { isDuplicate } = await import('./deduplicate.js')
+const { isDuplicate, clusterExists } = await import('./deduplicate.js')
 
 describe('isDuplicate', () => {
   beforeEach(() => {
@@ -37,5 +37,23 @@ describe('isDuplicate', () => {
     mockFindUniqueSource.mockResolvedValue({ id: 'src-1' })
     const result = await isDuplicate('event123', 'https://example.com/article')
     expect(result).toBe(true)
+  })
+})
+
+describe('clusterExists', () => {
+  beforeEach(() => {
+    mockFindUniqueEvent.mockReset()
+  })
+
+  it('returns the event id when the cluster is already classified in DB', async () => {
+    mockFindUniqueEvent.mockResolvedValue({ id: 'cuid-1' })
+    const result = await clusterExists('event123')
+    expect(result).toBe('cuid-1')
+  })
+
+  it('returns null when the cluster is unknown', async () => {
+    mockFindUniqueEvent.mockResolvedValue(null)
+    const result = await clusterExists('event123')
+    expect(result).toBeNull()
   })
 })

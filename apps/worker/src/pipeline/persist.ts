@@ -59,6 +59,62 @@ function conflictId(countryCode: string): string {
   return `conflict-${countryCode.toLowerCase()}`
 }
 
+// Recompute and store the threat level for a conflict from current evidence.
+// Exported for callers that change the evidence base outside persistEvent
+// (e.g. source accrual upgrading confidence).
+export async function recomputeConflictThreat(cId: string): Promise<number> {
+  const level = await computeConflictThreat(cId)
+  await prisma.conflict.update({
+    where: { id: cId },
+    data: { threatLevel: level },
+  })
+  return level
+}
+
+const CONFIDENCE_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 }
+
+// Record a newly seen source URL on an already-classified cluster and
+// recompute confidence cumulatively from ALL sources in the DB.
+// Confidence never moves down: a thin later batch must not erase corroboration.
+// No LLM call — new mentions of a known event are corroboration, not new signal.
+export async function accrueSourceToCluster(
+  event: NormalizedEvent,
+): Promise<{ accrued: boolean; conflictId: string | null; confidenceChanged: boolean }> {
+  const existing = await prisma.event.findUnique({
+    where: { clusterId: event.globalEventId },
+    select: { id: true, confidence: true, conflictId: true },
+  })
+  if (!existing) return { accrued: false, conflictId: null, confidenceChanged: false }
+
+  await prisma.eventSource.upsert({
+    where: { eventId_url: { eventId: existing.id, url: event.url } },
+    create: {
+      eventId: existing.id,
+      name: event.sourceName,
+      url: event.url,
+      publishedAt: event.publishedAt,
+    },
+    update: {},
+  })
+
+  const allSources = await prisma.eventSource.findMany({
+    where: { eventId: existing.id },
+    select: { name: true },
+  })
+  const cumulative = scoreConfidence(allSources.map(s => s.name))
+
+  const confidenceChanged =
+    (CONFIDENCE_RANK[cumulative] ?? 0) > (CONFIDENCE_RANK[existing.confidence] ?? 0)
+  if (confidenceChanged) {
+    await prisma.event.update({
+      where: { id: existing.id },
+      data: { confidence: cumulative },
+    })
+  }
+
+  return { accrued: true, conflictId: existing.conflictId, confidenceChanged }
+}
+
 export async function persistEvent(
   event: NormalizedEvent,
   allSourceNamesForCluster: string[],
@@ -135,7 +191,8 @@ export async function persistEvent(
       title,
       actor1: event.actor1Name || null,
       actor2: event.actor2Name || null,
-      confidence,
+      // confidence deliberately not updated here: it only moves via
+      // accrueSourceToCluster, cumulatively — a thin batch must not downgrade it
       // Re-classify updates these fields on re-ingest
       severity: classify.severity,
       significance: classify.significance,

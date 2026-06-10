@@ -7,17 +7,20 @@ const mockCreate = vi.fn().mockResolvedValue({})
 const mockFindUnique = vi.fn().mockResolvedValue(null)
 const mockFindMany = vi.fn().mockResolvedValue([])
 const mockUpdate = vi.fn().mockResolvedValue({})
+const mockEventFindUnique = vi.fn().mockResolvedValue(null)
+const mockEventUpdate = vi.fn().mockResolvedValue({})
+const mockSourceFindMany = vi.fn().mockResolvedValue([])
 
 vi.mock('@conflictwatch/db', () => ({
   prisma: {
     conflict: { upsert: mockUpsert, findUnique: mockFindUnique, update: mockUpdate },
-    event: { upsert: mockUpsert, findMany: mockFindMany },
-    eventSource: { upsert: mockCreate },
+    event: { upsert: mockUpsert, findMany: mockFindMany, findUnique: mockEventFindUnique, update: mockEventUpdate },
+    eventSource: { upsert: mockCreate, findMany: mockSourceFindMany },
     heartbeat: { upsert: mockUpsert },
   },
 }))
 
-const { persistEvent, updateHeartbeat } = await import('./persist.js')
+const { persistEvent, updateHeartbeat, accrueSourceToCluster, recomputeConflictThreat } = await import('./persist.js')
 
 const sampleEvent: NormalizedEvent = {
   globalEventId: '1234567890',
@@ -185,6 +188,88 @@ describe('persistEvent', () => {
   it('returns conflictId matching countryCode', async () => {
     const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
     expect(result.conflictId).toBe('conflict-ua')
+  })
+})
+
+describe('accrueSourceToCluster', () => {
+  beforeEach(() => {
+    mockCreate.mockReset().mockResolvedValue({})
+    mockEventFindUnique.mockReset().mockResolvedValue(null)
+    mockEventUpdate.mockReset().mockResolvedValue({})
+    mockSourceFindMany.mockReset().mockResolvedValue([])
+  })
+
+  it('returns accrued=false when the cluster is unknown', async () => {
+    mockEventFindUnique.mockResolvedValue(null)
+    const result = await accrueSourceToCluster(sampleEvent)
+    expect(result.accrued).toBe(false)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('records the new source URL on the existing event', async () => {
+    mockEventFindUnique.mockResolvedValue({ id: 'event-cuid-1', confidence: 'low', conflictId: 'conflict-ua' })
+    mockSourceFindMany.mockResolvedValue([{ name: 'Reuters' }])
+    const result = await accrueSourceToCluster(sampleEvent)
+    expect(result.accrued).toBe(true)
+    expect(result.conflictId).toBe('conflict-ua')
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { eventId_url: { eventId: 'event-cuid-1', url: sampleEvent.url } },
+      })
+    )
+  })
+
+  it('upgrades confidence when cumulative distinct sources cross the threshold', async () => {
+    mockEventFindUnique.mockResolvedValue({ id: 'event-cuid-1', confidence: 'low', conflictId: 'conflict-ua' })
+    mockSourceFindMany.mockResolvedValue([
+      { name: 'Reuters' }, { name: 'BBC News' }, { name: 'Al Jazeera' },
+    ])
+    const result = await accrueSourceToCluster(sampleEvent)
+    expect(result.confidenceChanged).toBe(true)
+    expect(mockEventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'event-cuid-1' },
+        data: { confidence: 'high' },
+      })
+    )
+  })
+
+  it('never downgrades confidence below the stored value', async () => {
+    mockEventFindUnique.mockResolvedValue({ id: 'event-cuid-1', confidence: 'high', conflictId: 'conflict-ua' })
+    mockSourceFindMany.mockResolvedValue([{ name: 'Reuters' }]) // would score 'low'
+    const result = await accrueSourceToCluster(sampleEvent)
+    expect(result.confidenceChanged).toBe(false)
+    expect(mockEventUpdate).not.toHaveBeenCalled()
+  })
+
+  it('collapses syndicated wire copies into one confirmation', async () => {
+    mockEventFindUnique.mockResolvedValue({ id: 'event-cuid-1', confidence: 'low', conflictId: 'conflict-ua' })
+    // 3 names but all Reuters syndication → 1 canonical source → stays low
+    mockSourceFindMany.mockResolvedValue([
+      { name: 'Reuters' }, { name: 'Reuters India' }, { name: 'reuters.com' },
+    ])
+    const result = await accrueSourceToCluster(sampleEvent)
+    expect(result.confidenceChanged).toBe(false)
+    expect(mockEventUpdate).not.toHaveBeenCalled()
+  })
+})
+
+describe('recomputeConflictThreat', () => {
+  beforeEach(() => {
+    mockFindMany.mockReset().mockResolvedValue([])
+    mockUpdate.mockReset().mockResolvedValue({})
+  })
+
+  it('updates the conflict with the freshly computed level', async () => {
+    mockFindMany.mockResolvedValue(Array(5).fill({ severity: 5 }))
+    const level = await recomputeConflictThreat('conflict-ua')
+    expect(level).toBe(4)
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'conflict-ua' },
+        data: { threatLevel: 4 },
+      })
+    )
   })
 })
 

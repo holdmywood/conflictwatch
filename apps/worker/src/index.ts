@@ -1,8 +1,13 @@
 import 'dotenv/config'
 import cron from 'node-cron'
 import { GdeltSource } from './sources/gdelt.js'
-import { isDuplicate } from './pipeline/deduplicate.js'
-import { persistEvent, updateHeartbeat } from './pipeline/persist.js'
+import { isDuplicate, clusterExists } from './pipeline/deduplicate.js'
+import {
+  persistEvent,
+  updateHeartbeat,
+  accrueSourceToCluster,
+  recomputeConflictThreat,
+} from './pipeline/persist.js'
 import { initTrustGate } from './pipeline/trust.js'
 import { fetchBestLeadText } from './pipeline/fetcher.js'
 import { classifyCluster } from './ai/enricher.js'
@@ -57,7 +62,9 @@ async function runIngestionCycle(): Promise<void> {
 
     const clusters = groupByCluster(events)
     const jumpedConflictIds = new Set<string>()
+    const accrualTouchedConflicts = new Set<string>()
     let newCount = 0
+    let accruedSources = 0
     let discardedNoFetch = 0
     let discardedExcluded = 0
     let enrichQueued = 0
@@ -66,47 +73,55 @@ async function runIngestionCycle(): Promise<void> {
       const firstEvent = clusterEvents[0]
       if (!firstEvent || !firstEvent.countryCode || isNaN(firstEvent.lat) || isNaN(firstEvent.lng)) continue
 
-      // Check if this cluster already exists in DB (already classified on prior ingest)
-      const isKnownCluster = await isDuplicate(clusterId, clusterEvents[0].url)
-
-      // For new clusters: fetch lead + classify (gated by cycle cap)
-      let classify = undefined
-      if (!isKnownCluster) {
-        if (classifyCalls >= MAX_ENRICH_PER_CYCLE) {
-          enrichQueued++
-          continue
+      // Known cluster (already classified): new mentions are corroboration.
+      // Accrue sources + cumulative confidence; never re-classify.
+      const knownEventId = await clusterExists(clusterId)
+      if (knownEventId) {
+        for (const event of clusterEvents) {
+          const dup = await isDuplicate(event.globalEventId, event.url)
+          if (dup) continue
+          const { accrued, conflictId, confidenceChanged } = await accrueSourceToCluster(event)
+          if (accrued) accruedSources++
+          // Confidence upgrades change the corroborated evidence base → threat must follow
+          if (confidenceChanged && conflictId) accrualTouchedConflicts.add(conflictId)
         }
+        continue
+      }
 
-        const urls = sortUrlsByTier(clusterEvents)
-        const lead = await fetchBestLeadText(urls)
-        if (!lead) {
-          discardedNoFetch++
-          console.log(`[worker] dropped cluster ${clusterId} — all sources failed to fetch`)
-          continue
-        }
+      // New cluster: fetch lead + classify (gated by cycle cap)
+      if (classifyCalls >= MAX_ENRICH_PER_CYCLE) {
+        enrichQueued++
+        continue
+      }
 
-        const allSources = clusterEvents.map(e => e.sourceName)
-        const sourceBreadth = new Set(allSources).size
+      const urls = sortUrlsByTier(clusterEvents)
+      const lead = await fetchBestLeadText(urls)
+      if (!lead) {
+        discardedNoFetch++
+        console.log(`[worker] dropped cluster ${clusterId} — all sources failed to fetch`)
+        continue
+      }
 
-        classify = await classifyCluster(lead, {
-          location: firstEvent.region,
-          date: firstEvent.publishedAt.toISOString().slice(0, 10),
-          cameoCategory: firstEvent.eventRootCode,
-          sourceBreadth,
-        })
-        classifyCalls++
+      const allSources = clusterEvents.map(e => e.sourceName)
+      const sourceBreadth = new Set(allSources).size
 
-        if (!classify || !classify.include) {
-          discardedExcluded++
-          console.log(
-            `[worker] excluded cluster ${clusterId} — ${classify?.exclude_reason ?? 'classify failed'}`
-          )
-          continue
-        }
+      const classify = await classifyCluster(lead, {
+        location: firstEvent.region,
+        date: firstEvent.publishedAt.toISOString().slice(0, 10),
+        cameoCategory: firstEvent.eventRootCode,
+        sourceBreadth,
+      })
+      classifyCalls++
+
+      if (!classify || !classify.include) {
+        discardedExcluded++
+        console.log(
+          `[worker] excluded cluster ${clusterId} — ${classify?.exclude_reason ?? 'classify failed'}`
+        )
+        continue
       }
 
       // Persist all mentions in this cluster
-      const allSources = clusterEvents.map(e => e.sourceName)
       for (const event of clusterEvents) {
         const dup = await isDuplicate(event.globalEventId, event.url)
         if (dup) continue
@@ -128,11 +143,18 @@ async function runIngestionCycle(): Promise<void> {
           actor2: event.actor2Name || null,
           eventRootCode: event.eventRootCode,
           publishedAt: event.publishedAt,
-          severity: classify?.severity ?? 1,
+          severity: classify.severity,
         }).catch(err =>
           console.error(`[worker] situation clustering failed for event ${eventId}:`, err)
         )
       }
+    }
+
+    // Confidence upgrades from accrual change which events count as corroborated
+    for (const cid of accrualTouchedConflicts) {
+      await recomputeConflictThreat(cid).catch(err =>
+        console.error(`[worker] threat recompute failed for ${cid}:`, err)
+      )
     }
 
     for (const cid of jumpedConflictIds) {
@@ -144,9 +166,9 @@ async function runIngestionCycle(): Promise<void> {
     sourcesOk = 1
     console.log(
       `[worker] done in ${Date.now() - start}ms — ` +
-      `${newCount} new events, ${discardedNoFetch} no-fetch, ` +
-      `${discardedExcluded} excluded, ${enrichQueued} queued, ` +
-      `${classifyCalls} classify calls`
+      `${newCount} new events, ${accruedSources} sources accrued, ` +
+      `${discardedNoFetch} no-fetch, ${discardedExcluded} excluded, ` +
+      `${enrichQueued} over-cap, ${classifyCalls} classify calls`
     )
   } catch (err) {
     sourcesFailed = 1
