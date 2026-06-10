@@ -1,8 +1,10 @@
-const QUADCLASS_THREAT: Record<string, number> = {
-  '1': 1,
-  '2': 1,
-  '3': 3,
-  '4': 5,
+// Threat level by CAMEO root code (1-5 scale)
+// Only codes in CONFLICT_CAMEO_ALLOWLIST (17-20) reach this function.
+const ROOT_THREAT: Record<string, number> = {
+  '17': 3, // coercion
+  '18': 4, // assault
+  '19': 5, // armed conflict
+  '20': 5, // mass violence
 }
 
 const ROOT_TO_EVENT_TYPE: Record<string, string> = {
@@ -41,8 +43,8 @@ const WIRE_AGENCIES = [
   'apa ',
 ]
 
-export function scoreThreat(quadClass: string): number {
-  return QUADCLASS_THREAT[quadClass] ?? 1
+export function scoreThreat(eventRootCode: string): number {
+  return ROOT_THREAT[eventRootCode] ?? 1
 }
 
 export function toEventType(eventRootCode: string): string {

@@ -1,27 +1,18 @@
-import { createHash } from 'crypto'
-import { redis } from '../lib/redis.js'
+import { prisma } from '@conflictwatch/db'
 
-const TTL_SECONDS = 604800 // 7 days
-
-function dedupeKey(globalEventId: string, mentionIdentifier: string): string {
-  return createHash('sha256')
-    .update(`${globalEventId}:${mentionIdentifier}`)
-    .digest('hex')
-}
-
+// Deduplication is DB-backed: an EventSource row with (eventId, url) is the "seen" marker.
+// This keeps dedup state in sync with the DB — clearing the DB automatically resets dedup.
 export async function isDuplicate(
   globalEventId: string,
-  mentionIdentifier: string
+  url: string
 ): Promise<boolean> {
-  const key = dedupeKey(globalEventId, mentionIdentifier)
-  const existing = await redis.get(key)
-  return existing !== null
-}
-
-export async function markSeen(
-  globalEventId: string,
-  mentionIdentifier: string
-): Promise<void> {
-  const key = dedupeKey(globalEventId, mentionIdentifier)
-  await redis.set(key, '1', 'EX', TTL_SECONDS)
+  const event = await prisma.event.findUnique({
+    where: { clusterId: globalEventId },
+    select: { id: true },
+  })
+  if (!event) return false
+  const source = await prisma.eventSource.findUnique({
+    where: { eventId_url: { eventId: event.id, url } },
+  })
+  return source !== null
 }

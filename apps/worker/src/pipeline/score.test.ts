@@ -2,19 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { scoreThreat, toEventType, scoreConfidence } from './score.js'
 
 describe('scoreThreat', () => {
-  it('maps QuadClass 1 (verbal cooperation) to threatLevel 1', () => {
-    expect(scoreThreat('1')).toBe(1)
+  it('rates armed conflict (19) as 5', () => {
+    expect(scoreThreat('19')).toBe(5)
   })
-  it('maps QuadClass 2 (material cooperation) to threatLevel 1', () => {
-    expect(scoreThreat('2')).toBe(1)
+  it('rates mass violence (20) as 5', () => {
+    expect(scoreThreat('20')).toBe(5)
   })
-  it('maps QuadClass 3 (verbal conflict) to threatLevel 3', () => {
-    expect(scoreThreat('3')).toBe(3)
+  it('rates assault (18) as 4', () => {
+    expect(scoreThreat('18')).toBe(4)
   })
-  it('maps QuadClass 4 (material conflict) to threatLevel 5', () => {
-    expect(scoreThreat('4')).toBe(5)
+  it('rates coercion (17) as 3', () => {
+    expect(scoreThreat('17')).toBe(3)
   })
-  it('returns 1 for unknown QuadClass', () => {
+  it('returns 1 for unknown code', () => {
     expect(scoreThreat('')).toBe(1)
   })
 })

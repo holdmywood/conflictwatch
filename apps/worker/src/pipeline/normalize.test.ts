@@ -17,6 +17,9 @@ import type { EventRow, MentionRow } from './normalize.js'
 //   59: DATEADDED
 //   60: SOURCEURL
 
+// Baseline row that passes all quality gates:
+//   EventRootCode=19, NumSources=3, NumArticles=15, Goldstein=-10, AvgTone=-4.5
+//   Actor1=RUSSIA, Actor2=UKRAINE (distinct, non-empty, no ethnic/religion codes)
 const SAMPLE_EVENT_ROW = [
   '1234567890',  // 0: GLOBALEVENTID
   '20240601',    // 1: SQLDATE
@@ -26,23 +29,23 @@ const SAMPLE_EVENT_ROW = [
   'RUS',         // 5: Actor1Code
   'RUSSIA',      // 6: Actor1Name
   'RUS',         // 7: Actor1CountryCode
-  '',            // 8
-  '',            // 9
-  '',            // 10
-  '',            // 11
-  'GOV',         // 12
-  '',            // 13
-  '',            // 14
+  '',            // 8: Actor1KnownGroupCode
+  '',            // 9: Actor1EthnicCode
+  '',            // 10: Actor1Religion1Code
+  '',            // 11: Actor1Religion2Code
+  'GOV',         // 12: Actor1Type1Code
+  '',            // 13: Actor1Type2Code
+  '',            // 14: Actor1Type3Code
   'UKR',         // 15: Actor2Code
   'UKRAINE',     // 16: Actor2Name
-  'UKR',         // 17
-  '',            // 18
-  '',            // 19
-  '',            // 20
-  '',            // 21
-  'GOV',         // 22
-  '',            // 23
-  '',            // 24
+  'UKR',         // 17: Actor2CountryCode
+  '',            // 18: Actor2KnownGroupCode
+  '',            // 19: Actor2EthnicCode
+  '',            // 20: Actor2Religion1Code
+  '',            // 21: Actor2Religion2Code
+  'GOV',         // 22: Actor2Type1Code
+  '',            // 23: Actor2Type2Code
+  '',            // 24: Actor2Type3Code
   '1',           // 25: IsRootEvent
   '190',         // 26: EventCode
   '19',          // 27: EventBaseCode
@@ -99,7 +102,7 @@ const SAMPLE_MENTION_ROW = [
 ].join('\t')
 
 describe('parseEventRow', () => {
-  it('extracts globalEventId and geo fields', () => {
+  it('extracts globalEventId and geo fields from a valid row', () => {
     const result = parseEventRow(SAMPLE_EVENT_ROW)
     expect(result).not.toBeNull()
     expect(result!.globalEventId).toBe('1234567890')
@@ -115,12 +118,71 @@ describe('parseEventRow', () => {
   })
 
   it('returns null when coordinates are (0,0) and country unknown', () => {
-    const zeroRow = SAMPLE_EVENT_ROW.split('\t')
-    zeroRow[56] = '0'  // ActionGeo_Lat (61-col layout)
-    zeroRow[57] = '0'  // ActionGeo_Long (61-col layout)
-    zeroRow[53] = 'XX' // ActionGeo_CountryCode (61-col layout)
-    const result = parseEventRow(zeroRow.join('\t'))
-    expect(result).toBeNull()
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[56] = '0'   // ActionGeo_Lat
+    row[57] = '0'   // ActionGeo_Long
+    row[53] = 'XX'  // ActionGeo_CountryCode
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  // Gate 1: CAMEO allowlist
+  it('returns null for root codes outside the conflict allowlist (e.g. 12 = rejection)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[28] = '12'
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  // Gate 2: corroboration
+  it('returns null when NumSources is below minimum (single-outlet story)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[32] = '2'  // NumSources < MIN_SOURCES (3)
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  it('returns null when NumArticles is below minimum', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[33] = '4'  // NumArticles < MIN_ARTICLES (5)
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  // Gate 3: Goldstein
+  it('returns null when Goldstein is above maximum (mild event)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[30] = '-3'  // above GOLDSTEIN_MAX (-4)
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  it('accepts Goldstein at exactly the maximum', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[30] = '-4'
+    expect(parseEventRow(row.join('\t'))).not.toBeNull()
+  })
+
+  // Gate 4: tone
+  it('returns null when AvgTone is above ceiling (neutral/positive story)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[34] = '-1'  // above MAX_TONE (-2)
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  it('accepts AvgTone at exactly the ceiling', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[34] = '-2'
+    expect(parseEventRow(row.join('\t'))).not.toBeNull()
+  })
+
+  // Gate 5: actor sanity
+  it('returns null when Actor1Name is empty', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[6] = ''
+    expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  it('returns null when Actor1Name equals Actor2Name (self-referential coding artifact)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[6] = 'AUSTRALIA'
+    row[16] = 'AUSTRALIA'
+    expect(parseEventRow(row.join('\t'))).toBeNull()
   })
 })
 
@@ -135,13 +197,40 @@ describe('parseMentionRow', () => {
 
 describe('buildTitle', () => {
   it('constructs a readable title from actor and geo fields', () => {
-    const title = buildTitle('RUSSIA', 'UKRAINE', 'armed-conflict', 'Kharkiv, Ukraine')
-    expect(title).toBe('Russia: armed-conflict involving Ukraine in Kharkiv, Ukraine')
+    expect(buildTitle('RUSSIA', 'UKRAINE', '19', 'Kharkiv, Ukraine'))
+      .toBe('Russia clashed with Ukraine in Kharkiv, Ukraine')
   })
 
-  it('omits actor2 when empty', () => {
-    const title = buildTitle('RUSSIA', '', 'armed-conflict', 'Kharkiv, Ukraine')
-    expect(title).toBe('Russia: armed-conflict in Kharkiv, Ukraine')
+  it('uses intransitive verb when actor2 is absent', () => {
+    expect(buildTitle('RUSSIA', '', '19', 'Kharkiv, Ukraine'))
+      .toBe('Russia engaged in armed conflict in Kharkiv, Ukraine')
+  })
+
+  it('returns neutral location title when actor1 equals actor2', () => {
+    expect(buildTitle('AUSTRALIA', 'AUSTRALIA', '19', 'Bondi Beach, Australia'))
+      .toBe('Armed clash reported in Bondi Beach, Australia')
+  })
+
+  it('returns neutral title when actor1 is empty', () => {
+    expect(buildTitle('', 'UKRAINE', '19', 'Kyiv'))
+      .toBe('Armed clash reported in Kyiv')
+  })
+
+  it('removes a2 and uses intransitive form when actor2 has a religion code', () => {
+    // actor2 identified by religion code → treated as anonymous
+    expect(buildTitle('GUNMEN', 'JEWISH', '19', 'Tel Aviv', '', '', '', 'JEW'))
+      .toBe('Gunmen engaged in armed conflict in Tel Aviv')
+  })
+
+  it('returns neutral title when actor1 has an ethnic code', () => {
+    expect(buildTitle('KURDISH', 'TURKEY', '18', 'Southeast Turkey', 'KRD', '', '', ''))
+      .toBe('Assault reported in Southeast Turkey')
+  })
+
+  it('removes religious actor name even without a code (name-based blocklist)', () => {
+    // "MUSLIM" as an actor name is in the ethnic/religion name blocklist
+    expect(buildTitle('RUSSIA', 'MUSLIM', '19', 'Chechnya'))
+      .toBe('Russia engaged in armed conflict in Chechnya')
   })
 })
 
@@ -153,7 +242,11 @@ describe('joinEventsAndMentions', () => {
     countryCode: 'UP',
     region: 'Kharkiv, Ukraine',
     actor1Name: 'RUSSIA',
+    actor1EthnicCode: '',
+    actor1Religion1Code: '',
     actor2Name: 'UKRAINE',
+    actor2EthnicCode: '',
+    actor2Religion1Code: '',
     eventCode: '190',
     eventRootCode: '19',
     quadClass: '4',
@@ -181,7 +274,9 @@ describe('joinEventsAndMentions', () => {
     expect(r.countryCode).toBe('UP')
     expect(r.region).toBe('Kharkiv, Ukraine')
     expect(r.actor1Name).toBe('RUSSIA')
+    expect(r.actor1EthnicCode).toBe('')
     expect(r.actor2Name).toBe('UKRAINE')
+    expect(r.actor2EthnicCode).toBe('')
     expect(r.eventCode).toBe('190')
     expect(r.eventRootCode).toBe('19')
     expect(r.quadClass).toBe('4')

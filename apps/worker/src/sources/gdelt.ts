@@ -1,7 +1,7 @@
 import axios from 'axios'
-import { createGunzip } from 'zlib'
-import { Readable } from 'stream'
+import AdmZip from 'adm-zip'
 import { parseEventRow, parseMentionRow, joinEventsAndMentions } from '../pipeline/normalize.js'
+import { clusterHasTrustedSource, bestTier, extractDomain, recordDomainUsage } from '../pipeline/trust.js'
 import type { DataSource, NormalizedEvent } from '../types.js'
 
 const LASTUPDATE_URL = 'http://data.gdeltproject.org/gdeltv2/lastupdate.txt'
@@ -26,17 +26,10 @@ async function downloadAndDecompress(url: string): Promise<string> {
     responseType: 'arraybuffer',
     timeout: 30000,
   })
-  const buffer = Buffer.from(response.data)
-
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    const gunzip = createGunzip()
-    const readable = Readable.from(buffer)
-    readable.pipe(gunzip)
-    gunzip.on('data', (chunk: Buffer) => chunks.push(chunk))
-    gunzip.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
-    gunzip.on('error', reject)
-  })
+  const zip = new AdmZip(Buffer.from(response.data))
+  const entries = zip.getEntries()
+  if (entries.length === 0) throw new Error(`Empty ZIP archive from ${url}`)
+  return entries[0].getData().toString('utf-8')
 }
 
 export class GdeltSource implements DataSource {
@@ -61,6 +54,37 @@ export class GdeltSource implements DataSource {
       .filter((r): r is NonNullable<typeof r> => r !== null)
     const mentionRows = mentionLines.map(parseMentionRow)
 
-    return joinEventsAndMentions(eventRows, mentionRows)
+    // Group mention URLs by cluster for trust evaluation
+    const urlsByCluster = new Map<string, string[]>()
+    for (const m of mentionRows) {
+      const urls = urlsByCluster.get(m.globalEventId) ?? []
+      urls.push(m.url)
+      urlsByCluster.set(m.globalEventId, urls)
+    }
+
+    // Apply source-trust gate: reject clusters with no tier1/tier2/specialist source.
+    // Record domain usage for reliability tracking.
+    const passedClusterIds = new Set<string>()
+    const tierByCluster = new Map<string, string>()
+
+    for (const [clusterId, urls] of urlsByCluster) {
+      // Track domain usage (best-effort, non-blocking)
+      for (const url of urls) {
+        const domain = extractDomain(url)
+        if (domain) recordDomainUsage(domain).catch(() => {})
+      }
+
+      const trusted = await clusterHasTrustedSource(urls)
+      if (trusted) {
+        passedClusterIds.add(clusterId)
+        const tier = await bestTier(urls)
+        tierByCluster.set(clusterId, tier)
+      }
+    }
+
+    // Only join events that passed the trust gate
+    const trustedEventRows = eventRows.filter(e => passedClusterIds.has(e.globalEventId))
+
+    return joinEventsAndMentions(trustedEventRows, mentionRows, tierByCluster)
   }
 }
