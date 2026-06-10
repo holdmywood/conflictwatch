@@ -1,7 +1,8 @@
 import { prisma } from '@conflictwatch/db'
 import TerminalShell from '../components/TerminalShell'
 import SignalsView from './SignalsView'
-import { sevColor } from '../lib/tokens'
+import SevMark from '../components/SevMark'
+import { forecastColor, fmtPct } from '../lib/tokens'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,38 +65,46 @@ export default async function SignalsPage() {
       }
     })
     .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => (b.signal.pEscalation ?? -1) - (a.signal.pEscalation ?? -1))
 
   return (
     <TerminalShell
       sidebar={
-        <div className="py-2">
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
-            Active signals
+        <div className="py-1.5">
+          <div className="flex items-baseline justify-between px-2.5 py-1">
+            <span className="label">Active signals</span>
+            <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>{conflictsWithSignals.length}</span>
           </div>
-          {conflictsWithSignals.map(({ conflict, signal }) => (
-            <a
-              key={conflict.id}
-              href={`#${conflict.id}`}
-              className="flex items-center gap-2 px-3 py-2 hover:bg-[#1e2533] transition-colors"
-            >
-              {/* Severity dot */}
-              <span
-                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                style={{ background: sevColor(conflict.threatLevel) }}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-mono truncate text-white">{conflict.name}</div>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  {signal.pEscalation !== null ? `${Math.round(signal.pEscalation * 100)}% P(esc)` : signal.escalationRisk}
-                </div>
-              </div>
-            </a>
-          ))}
+          <ul>
+            {conflictsWithSignals.map(({ conflict, signal }) => (
+              <li key={conflict.id}>
+                <a
+                  href={`#${conflict.id}`}
+                  className="flex items-center gap-2 px-2.5 py-[7px]"
+                >
+                  <SevMark level={conflict.threatLevel} />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[12px] leading-tight truncate" style={{ color: 'var(--text)' }}>
+                      {conflict.name}
+                    </span>
+                    <span className="block text-[10px] truncate" style={{ color: 'var(--text-3)' }}>
+                      {conflict.region}
+                    </span>
+                  </span>
+                  <span
+                    className="tabnum text-[11px] shrink-0"
+                    style={{ color: signal.pEscalation !== null ? forecastColor(signal.pEscalation) : 'var(--text-3)' }}
+                  >
+                    {signal.pEscalation !== null ? fmtPct(signal.pEscalation) : signal.escalationRisk.toUpperCase()}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
         </div>
       }
-      main={
-        <SignalsView conflictsWithSignals={conflictsWithSignals} />
-      }
-    />
+    >
+      <SignalsView conflictsWithSignals={conflictsWithSignals} />
+    </TerminalShell>
   )
 }

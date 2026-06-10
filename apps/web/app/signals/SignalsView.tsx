@@ -1,41 +1,31 @@
 'use client'
 
-import SignalCard from '../components/SignalCard'
-
-interface ConflictSummary {
-  id: string; name: string; region: string; threatLevel: number; currentSituationLine: string
-}
-
-interface SignalSummary {
-  id: string; targetId: string; escalationRisk: string; pEscalation: number | null;
-  ciLow: number | null; ciHigh: number | null; horizonDays: number | null; modelVersion: string;
-  trajectory: string; drivers: string[]; actorsOfConcern: string[]; rationale: string;
-  computedAt: string; usedEventIds: string[];
-}
+import SignalCard, { type Signal, type SignalConflict } from '../components/SignalCard'
 
 export default function SignalsView({
   conflictsWithSignals,
 }: {
-  conflictsWithSignals: Array<{ conflict: ConflictSummary; signal: SignalSummary }>
+  conflictsWithSignals: Array<{ conflict: SignalConflict; signal: Signal }>
 }) {
   if (conflictsWithSignals.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-sm" style={{ color: 'var(--text-muted)' }}>
-        No escalation signals yet. The worker will generate signals after the first ingestion cycle.
+      <div className="flex-1 flex items-center justify-center p-4">
+        <p className="text-[12px] max-w-sm text-center" style={{ color: 'var(--text-3)' }}>
+          No escalation signals yet. Signals compute after the worker&apos;s first ingestion cycle — check the event tape on the overview for ingest progress.
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
-      {conflictsWithSignals.map(({ conflict, signal }) => (
-        <div key={conflict.id} id={conflict.id}>
-          <SignalCard
-            conflict={conflict}
-            signal={signal}
-          />
-        </div>
-      ))}
+    <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
+      <div className="grid gap-1.5 grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 items-start">
+        {conflictsWithSignals.map(({ conflict, signal }) => (
+          <div key={conflict.id} id={conflict.id} className="scroll-mt-2">
+            <SignalCard conflict={conflict} signal={signal} />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

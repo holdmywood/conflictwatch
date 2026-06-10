@@ -1,11 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { fmtUTC } from '../lib/tokens'
 import type { ConflictPoint } from './Globe'
 
 interface Event {
   id: string
   title: string
+  actor1?: string | null
+  actor2?: string | null
   eventType: string
   confidence: string
   publishedAt: string
@@ -17,95 +20,73 @@ interface ConflictDetail {
   events: Event[]
 }
 
-interface ConflictPanelProps {
-  conflictId: string | null
-  onClose: () => void
-}
-
-const CONFIDENCE_COLORS: Record<string, string> = {
-  high: 'text-green-400 border-green-400',
-  medium: 'text-amber-400 border-amber-400',
-  low: 'text-gray-400 border-gray-500',
-}
-
-export default function ConflictPanel({ conflictId, onClose }: ConflictPanelProps) {
+/**
+ * Recent events for the selected conflict — right-rail panel body.
+ */
+export default function ConflictPanel({ conflictId }: { conflictId: string | null }) {
   const [detail, setDetail] = useState<ConflictDetail | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     if (!conflictId) return
     setLoading(true)
+    setError(false)
     fetch(`/api/conflict/${conflictId}`)
-      .then(r => r.json())
-      .then(data => {
-        setDetail(data)
-        setLoading(false)
-      })
-      .catch(() => {
-        setDetail(null)
-        setLoading(false)
-      })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(data => setDetail(data))
+      .catch(() => { setDetail(null); setError(true) })
+      .finally(() => setLoading(false))
   }, [conflictId])
 
-  if (!conflictId) return null
+  if (!conflictId) {
+    return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Select a conflict to view its event history.</p>
+  }
+  if (loading) {
+    return <p className="tabnum text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Loading events…</p>
+  }
+  if (error || !detail) {
+    return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>Event service unreachable. Select the conflict again to retry.</p>
+  }
+  if (detail.events.length === 0) {
+    return <p className="text-[11px] p-2.5" style={{ color: 'var(--text-3)' }}>No events recorded for this conflict yet.</p>
+  }
 
   return (
-    <div className="absolute top-0 right-0 h-full w-96 bg-[#111827] border-l border-[#1f2937] z-10 overflow-y-auto flex flex-col">
-      <div className="flex items-center justify-between p-4 border-b border-[#1f2937]">
-        <h2 className="text-lg font-semibold truncate">
-          {detail?.conflict.name ?? 'Loading…'}
-        </h2>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-white text-xl leading-none ml-2"
-          aria-label="Close panel"
-        >
-          ×
-        </button>
-      </div>
-
-      {loading && (
-        <div className="p-4 text-gray-400 font-mono text-sm">Fetching intel…</div>
-      )}
-
-      {detail && (
-        <div className="p-4 space-y-4">
-          <div className="flex gap-3 text-sm font-mono text-gray-400">
-            <span>Threat: <span className="text-white">{detail.conflict.threatLevel}/5</span></span>
-            <span>Events: <span className="text-white">{detail.events.length}</span></span>
+    <ol className="divide-y" style={{ borderColor: 'var(--border)' }}>
+      {detail.events.map(event => (
+        <li key={event.id} className="px-2.5 py-2" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-baseline gap-2">
+            <span className="tabnum text-[10px] shrink-0" style={{ color: 'var(--text-3)' }}>
+              {fmtUTC(event.publishedAt)}
+            </span>
+            <span className="tabnum text-[10px] uppercase shrink-0" style={{ color: 'var(--text-2)' }}>
+              {event.eventType}
+            </span>
+            <span className="tabnum text-[10px] uppercase ml-auto shrink-0" style={{ color: 'var(--text-3)' }}>
+              conf {event.confidence}
+            </span>
           </div>
-
-          <div className="space-y-3">
-            {detail.events.slice(0, 5).map(event => (
-              <div key={event.id} className="border border-[#1f2937] rounded p-3 space-y-2">
-                <p className="text-sm text-gray-200 leading-snug">{event.title}</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-xs border rounded px-1.5 py-0.5 font-mono ${CONFIDENCE_COLORS[event.confidence] ?? CONFIDENCE_COLORS.low}`}>
-                    {event.confidence}
-                  </span>
-                  <span className="text-xs text-gray-500 font-mono">{event.eventType}</span>
-                  <span className="text-xs text-gray-500 font-mono">
-                    {new Date(event.publishedAt).toLocaleDateString()}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {event.sources.map(src => (
-                    <a
-                      key={src.id}
-                      href={src.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-blue-400 hover:underline truncate max-w-[140px]"
-                    >
-                      {src.name}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+          {(event.actor1 || event.actor2) && (
+            <p className="tabnum text-[10px] mt-1" style={{ color: 'var(--text-2)' }}>
+              {[event.actor1, event.actor2].filter(Boolean).join(' · ')}
+            </p>
+          )}
+          <p className="text-[12px] leading-snug mt-0.5" style={{ color: 'var(--text)' }}>{event.title}</p>
+          {event.sources.length > 0 && (
+            <p className="text-[10px] mt-1 truncate" style={{ color: 'var(--text-3)' }}>
+              {event.sources.map((src, i) => (
+                <span key={src.id}>
+                  {i > 0 && ' · '}
+                  <a href={src.url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-2)' }}>
+                    {src.name}
+                  </a>
+                </span>
+              ))}
+            </p>
+          )}
+        </li>
+      ))}
+    </ol>
   )
 }

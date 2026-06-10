@@ -1,3 +1,5 @@
+import { fmtUTC } from '../../lib/tokens'
+
 interface Source {
   id: string
   name: string
@@ -6,6 +8,8 @@ interface Source {
 
 interface EventCardProps {
   title: string
+  actor1?: string | null
+  actor2?: string | null
   eventType: string
   confidence: string
   publishedAt: string
@@ -14,14 +18,14 @@ interface EventCardProps {
   sourceCount: number
 }
 
-const CONFIDENCE_COLORS: Record<string, string> = {
-  high:   'text-green-400 border-green-400',
-  medium: 'text-amber-400 border-amber-400',
-  low:    'text-gray-400 border-gray-500',
-}
-
+/**
+ * One feed row: time, type, confidence, actors/title, region, sources.
+ * Rendered as a table row so every column aligns across the feed.
+ */
 export default function EventCard({
   title,
+  actor1,
+  actor2,
   eventType,
   confidence,
   publishedAt,
@@ -29,43 +33,38 @@ export default function EventCard({
   sources,
   sourceCount,
 }: EventCardProps) {
+  const actors = [actor1, actor2].filter(Boolean).join(' · ')
   return (
-    <div className="border border-[#1f2937] rounded-lg p-4 space-y-3 bg-[#111827]">
-      <p className="text-sm text-gray-200 leading-snug">{title}</p>
-
-      <div className="flex items-center gap-2 flex-wrap">
-        <span
-          className={`text-xs border rounded px-1.5 py-0.5 font-mono ${
-            CONFIDENCE_COLORS[confidence] ?? CONFIDENCE_COLORS.low
-          }`}
-        >
-          {confidence}
-        </span>
-        <span className="text-xs bg-[#1f2937] text-gray-300 rounded px-1.5 py-0.5 font-mono">
-          {eventType}
-        </span>
-        <span className="text-xs text-gray-500 font-mono truncate max-w-[200px]">{region}</span>
-        <span className="text-xs text-gray-500 font-mono ml-auto">
-          {new Date(publishedAt).toLocaleString()}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-xs text-gray-500 font-mono">
+    <tr className="border-b align-top" style={{ borderColor: 'var(--border)' }}>
+      <td className="tabnum text-[10px] pl-3 pr-2 py-2 whitespace-nowrap w-px" style={{ color: 'var(--text-3)' }}>
+        {fmtUTC(publishedAt)}
+      </td>
+      <td className="tabnum text-[10px] uppercase pr-2 py-2 whitespace-nowrap w-px" style={{ color: 'var(--text-2)' }}>
+        {eventType}
+      </td>
+      <td className="tabnum text-[10px] uppercase pr-3 py-2 whitespace-nowrap w-px" style={{ color: 'var(--text-3)' }}>
+        {confidence}
+      </td>
+      <td className="pr-3 py-2 min-w-0">
+        {actors && (
+          <p className="tabnum text-[10px] mb-0.5" style={{ color: 'var(--text-2)' }}>{actors}</p>
+        )}
+        <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{title}</p>
+        <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-3)' }}>
           {sourceCount} source{sourceCount !== 1 ? 's' : ''}
-        </span>
-        {sources.map(src => (
-          <a
-            key={src.id}
-            href={src.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-400 hover:underline truncate max-w-[150px]"
-          >
-            {src.name}
-          </a>
-        ))}
-      </div>
-    </div>
+          {sources.map(src => (
+            <span key={src.id}>
+              {' · '}
+              <a href={src.url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-2)' }}>
+                {src.name}
+              </a>
+            </span>
+          ))}
+        </p>
+      </td>
+      <td className="text-[10px] pr-3 py-2 text-right whitespace-nowrap w-px hidden sm:table-cell" style={{ color: 'var(--text-3)' }}>
+        {region}
+      </td>
+    </tr>
   )
 }

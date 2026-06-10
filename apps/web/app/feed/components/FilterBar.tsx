@@ -40,9 +40,6 @@ const EVENT_TYPES = [
   'other',
 ]
 
-const INPUT_CLS =
-  'bg-[#0a0f1a] border border-[#1f2937] rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-gray-500'
-
 export default function FilterBar({ filters, onChange }: FilterBarProps) {
   const update = (key: keyof FeedFilters, value: string) =>
     onChange({ ...filters, [key]: value })
@@ -55,59 +52,75 @@ export default function FilterBar({ filters, onChange }: FilterBarProps) {
     filters.to
 
   return (
-    <div className="flex items-center gap-3 flex-wrap px-4 py-3 border-b border-[#1f2937] bg-[#0d131f]">
-      <input
-        type="text"
-        placeholder="Region…"
-        value={filters.region}
-        onChange={e => update('region', e.target.value)}
-        className={`${INPUT_CLS} w-44 placeholder-gray-500`}
-      />
+    <div
+      className="flex items-center gap-2 flex-wrap px-3 py-2 border-b shrink-0"
+      style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+    >
+      <label className="flex items-center gap-1.5">
+        <span className="label">Region</span>
+        <input
+          type="text"
+          placeholder="any"
+          value={filters.region}
+          onChange={e => update('region', e.target.value)}
+          className="field w-36"
+        />
+      </label>
 
-      <select
-        value={filters.eventType}
-        onChange={e => update('eventType', e.target.value)}
-        className={INPUT_CLS}
-      >
-        <option value="">All types</option>
-        {EVENT_TYPES.map(t => (
-          <option key={t} value={t}>
-            {t}
-          </option>
-        ))}
-      </select>
+      <label className="flex items-center gap-1.5">
+        <span className="label">Type</span>
+        <select
+          value={filters.eventType}
+          onChange={e => update('eventType', e.target.value)}
+          className="field"
+        >
+          <option value="">any</option>
+          {EVENT_TYPES.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </label>
 
-      <select
-        value={filters.confidence}
-        onChange={e => update('confidence', e.target.value)}
-        className={INPUT_CLS}
-      >
-        <option value="">All confidence</option>
-        <option value="high">high</option>
-        <option value="medium">medium</option>
-        <option value="low">low</option>
-      </select>
+      <label className="flex items-center gap-1.5">
+        <span className="label">Confidence</span>
+        <select
+          value={filters.confidence}
+          onChange={e => update('confidence', e.target.value)}
+          className="field"
+        >
+          <option value="">any</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      </label>
 
-      <input
-        type="date"
-        value={filters.from}
-        onChange={e => update('from', e.target.value)}
-        className={INPUT_CLS}
-      />
-      <span className="text-gray-500 text-sm select-none">→</span>
-      <input
-        type="date"
-        value={filters.to}
-        onChange={e => update('to', e.target.value)}
-        className={INPUT_CLS}
-      />
+      <label className="flex items-center gap-1.5">
+        <span className="label">From</span>
+        <input
+          type="date"
+          value={filters.from}
+          onChange={e => update('from', e.target.value)}
+          className="field"
+        />
+      </label>
+      <label className="flex items-center gap-1.5">
+        <span className="label">To</span>
+        <input
+          type="date"
+          value={filters.to}
+          onChange={e => update('to', e.target.value)}
+          className="field"
+        />
+      </label>
 
       {hasFilters && (
         <button
           onClick={() => onChange(EMPTY_FILTERS)}
-          className="text-xs text-gray-400 hover:text-white font-mono ml-1"
+          className="tabnum text-[10px] uppercase tracking-[0.08em] px-2 py-1 border transition-colors hover:border-[var(--border-strong)]"
+          style={{ color: 'var(--text-2)', borderColor: 'var(--border)' }}
         >
-          clear
+          Clear filters
         </button>
       )}
     </div>

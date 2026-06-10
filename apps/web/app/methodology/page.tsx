@@ -1,6 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import TerminalShell from '../components/TerminalShell'
+import Panel from '../components/Panel'
+import { fmtInt, fmtUTC } from '../lib/tokens'
 
 interface MethodologyData {
   totalSignals: number
@@ -12,98 +15,189 @@ interface MethodologyData {
   modelUpdatedAt: string | null
 }
 
+function Stat({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) {
+  return (
+    <div className="border p-2.5" style={{ borderColor: 'var(--border)' }}>
+      <div className="label mb-1">{label}</div>
+      <div className="tabnum text-[15px] font-medium" style={{ color: 'var(--text)' }}>{value}</div>
+      {note && <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-3)' }}>{note}</div>}
+    </div>
+  )
+}
+
+/** Reliability plot: predicted vs observed escalation rate per probability bin. */
+function CalibrationChart({ curve }: { curve: MethodologyData['reliabilityCurve'] }) {
+  const S = 220   // plot size
+  const M = 26    // margin for axis labels
+  const x = (v: number) => M + v * S
+  const y = (v: number) => M + (1 - v) * S
+
+  return (
+    <svg
+      width={S + M * 2}
+      height={S + M * 2}
+      role="img"
+      aria-label="Calibration plot: predicted probability versus observed escalation rate"
+      className="shrink-0"
+    >
+      {/* frame */}
+      <rect x={M} y={M} width={S} height={S} fill="none" stroke="var(--border)" />
+      {/* gridlines at 25/50/75 */}
+      {[0.25, 0.5, 0.75].map(t => (
+        <g key={t}>
+          <line x1={x(t)} y1={y(0)} x2={x(t)} y2={y(1)} stroke="var(--border)" strokeDasharray="2 4" />
+          <line x1={x(0)} y1={y(t)} x2={x(1)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 4" />
+        </g>
+      ))}
+      {/* perfect-calibration diagonal */}
+      <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} stroke="var(--border-strong)" strokeDasharray="4 3" />
+      <text
+        x={x(0.58)} y={y(0.64)}
+        fill="var(--text-3)" fontSize="9" fontFamily="var(--font-mono)"
+        transform={`rotate(-45 ${x(0.58)} ${y(0.64)})`}
+      >
+        perfect calibration
+      </text>
+      {/* observed points, area ∝ n */}
+      {curve.map(b => (
+        <circle
+          key={b.label}
+          cx={x(b.predicted)}
+          cy={y(b.actual)}
+          r={3 + Math.min(4, Math.sqrt(b.count))}
+          fill="var(--fc-mid)"
+          fillOpacity={0.85}
+        >
+          <title>{`${b.label}: observed ${(b.actual * 100).toFixed(0)}% over n=${b.count}`}</title>
+        </circle>
+      ))}
+      {/* axis labels */}
+      {[0, 0.5, 1].map(t => (
+        <g key={t}>
+          <text x={x(t)} y={M + S + 14} fill="var(--text-3)" fontSize="9" fontFamily="var(--font-mono)" textAnchor="middle">
+            {t * 100}
+          </text>
+          <text x={M - 6} y={y(t) + 3} fill="var(--text-3)" fontSize="9" fontFamily="var(--font-mono)" textAnchor="end">
+            {t * 100}
+          </text>
+        </g>
+      ))}
+      <text x={M + S / 2} y={M + S + 26} fill="var(--text-2)" fontSize="9" fontFamily="var(--font-mono)" textAnchor="middle">
+        predicted %
+      </text>
+      <text x={9} y={M + S / 2} fill="var(--text-2)" fontSize="9" fontFamily="var(--font-mono)" textAnchor="middle" transform={`rotate(-90 9 ${M + S / 2})`}>
+        observed %
+      </text>
+    </svg>
+  )
+}
+
 export default function MethodologyPage() {
   const [data, setData] = useState<MethodologyData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     fetch('/api/methodology')
-      .then(r => r.json())
+      .then(r => (r.ok ? r.json() : Promise.reject()))
       .then(setData)
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
   }, [])
 
   return (
-    <main className="max-w-3xl mx-auto px-4 py-10 font-mono">
-      <h1 className="text-2xl font-bold mb-1">Methodology & Calibration</h1>
-      <p className="text-sm text-gray-500 mb-8">
-        How ConflictWatch computes escalation probabilities and tracks accuracy over time.
-      </p>
-
-      <section className="mb-8">
-        <h2 className="text-base font-semibold uppercase tracking-wide mb-3">Probability Model</h2>
-        <div className="border border-amber-400 bg-amber-50 px-4 py-3 text-sm mb-4">
-          <span className="font-bold text-amber-700 uppercase text-xs mr-2">Model</span>
-          L2-regularized logistic regression on 5 trend features: event tempo, severity slope,
-          geographic spread, source breadth, and actor count. The LLM writes the rationale;
-          the number is computed deterministically from stored inputs.
-        </div>
-        {loading ? (
-          <p className="text-sm text-gray-400">Loading...</p>
-        ) : data ? (
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div className="border p-3">
-              <div className="text-gray-500 text-xs mb-1">Model version</div>
-              <div className="font-medium">{data.modelVersion}</div>
-            </div>
-            <div className="border p-3">
-              <div className="text-gray-500 text-xs mb-1">Mean Brier score</div>
-              <div className="font-medium">
-                {data.meanBrierScore !== null ? data.meanBrierScore.toFixed(4) : '—'}
-                <span className="text-gray-400 text-xs ml-1">(lower = better; 0 = perfect)</span>
+    <TerminalShell>
+      <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
+        <div className="max-w-3xl space-y-1.5">
+          <Panel title="Probability model">
+            <p className="text-[12.5px] leading-relaxed max-w-[68ch] mb-2.5" style={{ color: 'var(--text)' }}>
+              Escalation probabilities come from an L2-regularized logistic regression over five trend
+              features: event tempo, severity slope, geographic spread, source breadth, and actor count.
+              The language model writes the rationale; the number is computed deterministically from
+              stored inputs and is reproducible from the signal&apos;s provenance record.
+            </p>
+            {loading ? (
+              <p className="tabnum text-[11px]" style={{ color: 'var(--text-3)' }}>Loading…</p>
+            ) : error ? (
+              <p className="text-[12px]" style={{ color: 'var(--text-2)' }}>Calibration service unreachable. Reload to retry.</p>
+            ) : data ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                <Stat label="Model" value={data.modelVersion} note={data.modelUpdatedAt ? `as of ${fmtUTC(data.modelUpdatedAt)}` : undefined} />
+                <Stat
+                  label="Mean Brier"
+                  value={data.meanBrierScore !== null ? data.meanBrierScore.toFixed(4) : '—'}
+                  note="0 = perfect · 0.25 = coin flip"
+                />
+                <Stat label="Resolved" value={`${fmtInt(data.totalResolved)} / ${fmtInt(data.totalSignals)}`} note="signals with known outcome" />
+                <Stat label="Pending" value={fmtInt(data.pendingResolution)} note="awaiting horizon close" />
               </div>
-            </div>
-            <div className="border p-3">
-              <div className="text-gray-500 text-xs mb-1">Resolved signals</div>
-              <div className="font-medium">{data.totalResolved} of {data.totalSignals} total</div>
-            </div>
-            <div className="border p-3">
-              <div className="text-gray-500 text-xs mb-1">Pending resolution</div>
-              <div className="font-medium">{data.pendingResolution}</div>
-            </div>
-          </div>
-        ) : null}
-      </section>
+            ) : null}
+          </Panel>
 
-      <section className="mb-8">
-        <h2 className="text-base font-semibold uppercase tracking-wide mb-3">Reliability Curve</h2>
-        <p className="text-xs text-gray-500 mb-4">
-          Each row shows how often events in a probability band actually escalated.
-          A well-calibrated model has predicted ≈ actual in every row.
-        </p>
-        {loading ? (
-          <p className="text-sm text-gray-400">Loading...</p>
-        ) : data?.reliabilityCurve.length === 0 ? (
-          <p className="text-sm text-gray-400">No resolved signals yet — check back after {data.pendingResolution} pending signals resolve.</p>
-        ) : (
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b text-left text-xs text-gray-500">
-                <th className="py-1 pr-4">Predicted band</th>
-                <th className="py-1 pr-4 text-right">Predicted midpoint</th>
-                <th className="py-1 pr-4 text-right">Actual rate</th>
-                <th className="py-1 text-right">n</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.reliabilityCurve.map(row => (
-                <tr key={row.label} className="border-b">
-                  <td className="py-1 pr-4">{row.label}</td>
-                  <td className="py-1 pr-4 text-right">{(row.predicted * 100).toFixed(0)}%</td>
-                  <td className="py-1 pr-4 text-right">{(row.actual * 100).toFixed(0)}%</td>
-                  <td className="py-1 text-right text-gray-500">{row.count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+          <Panel title="Calibration">
+            {loading ? (
+              <p className="tabnum text-[11px]" style={{ color: 'var(--text-3)' }}>Loading…</p>
+            ) : !data || data.reliabilityCurve.length === 0 ? (
+              <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>
+                No resolved signals yet.
+                {data && data.pendingResolution > 0
+                  ? ` The curve appears once the ${fmtInt(data.pendingResolution)} pending signal${data.pendingResolution !== 1 ? 's' : ''} resolve.`
+                  : ' The curve appears once signals resolve against observed outcomes.'}
+              </p>
+            ) : (
+              <div className="flex flex-col lg:flex-row gap-4 items-start">
+                <CalibrationChart curve={data.reliabilityCurve} />
+                <table className="border-collapse flex-1 w-full">
+                  <thead>
+                    <tr className="border-b" style={{ borderColor: 'var(--border-strong)' }}>
+                      <th className="label text-left font-normal py-1 pr-3">Band</th>
+                      <th className="label text-right font-normal py-1 pr-3">Predicted</th>
+                      <th className="label text-right font-normal py-1 pr-3">Observed</th>
+                      <th className="label text-right font-normal py-1">n</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.reliabilityCurve.map(row => (
+                      <tr key={row.label} className="border-b" style={{ borderColor: 'var(--border)' }}>
+                        <td className="tabnum text-[11px] py-1 pr-3" style={{ color: 'var(--text-2)' }}>{row.label}</td>
+                        <td className="tabnum text-[11px] py-1 pr-3 text-right" style={{ color: 'var(--text)' }}>{(row.predicted * 100).toFixed(0)}%</td>
+                        <td className="tabnum text-[11px] py-1 pr-3 text-right" style={{ color: 'var(--text)' }}>{(row.actual * 100).toFixed(0)}%</td>
+                        <td className="tabnum text-[11px] py-1 text-right" style={{ color: 'var(--text-3)' }}>{fmtInt(row.count)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
 
-      <section className="text-xs text-gray-400 border-t pt-4">
-        <p className="mb-2"><strong>Features used:</strong> event tempo (events/day in 7-day window), severity slope (Δ avg-severity, first vs second half), geographic spread (distinct regions), source breadth (independent tier-1/2 sources), actor count (named actors).</p>
-        <p className="mb-2"><strong>Outcome definition:</strong> A conflict is considered to have escalated if it produced a high-severity (≥4) event from a medium/high-confidence source within the signal&apos;s horizon window.</p>
-        <p><strong>Brier score:</strong> (predicted probability − actual outcome)². Range 0–1; lower is better. A model predicting 50% always scores 0.25.</p>
-      </section>
-    </main>
+          <Panel title="Definitions">
+            <dl className="space-y-2 text-[12px] leading-relaxed max-w-[72ch]">
+              <div>
+                <dt className="label mb-0.5">Features</dt>
+                <dd style={{ color: 'var(--text-2)' }}>
+                  Event tempo (events/day, 7-day window) · severity slope (Δ mean severity, first vs second half) ·
+                  geographic spread (distinct regions) · source breadth (independent tier-1/2 sources) · actor count (named actors).
+                </dd>
+              </div>
+              <div>
+                <dt className="label mb-0.5">Escalation outcome</dt>
+                <dd style={{ color: 'var(--text-2)' }}>
+                  A conflict escalated if it produced a severity-4-or-higher event from a medium/high-confidence
+                  source within the signal&apos;s horizon window.
+                </dd>
+              </div>
+              <div>
+                <dt className="label mb-0.5">Brier score</dt>
+                <dd style={{ color: 'var(--text-2)' }}>
+                  (predicted probability − actual outcome)², range 0–1, lower is better.
+                  A model that always predicts 50% scores 0.2500.
+                </dd>
+              </div>
+            </dl>
+          </Panel>
+        </div>
+      </div>
+    </TerminalShell>
   )
 }

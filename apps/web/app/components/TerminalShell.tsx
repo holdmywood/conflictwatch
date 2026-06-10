@@ -1,57 +1,74 @@
+'use client'
+
 import type React from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import StatusBar from './StatusBar'
+
+const NAV = [
+  { href: '/', label: 'Overview' },
+  { href: '/signals', label: 'Signals' },
+  { href: '/feed', label: 'Feed' },
+  { href: '/predictions', label: 'Forecasts' },
+  { href: '/report', label: 'Report' },
+  { href: '/methodology', label: 'Methods' },
+] as const
 
 interface TerminalShellProps {
-  sidebar: React.ReactNode
-  main: React.ReactNode
-  header?: React.ReactNode
+  /** Optional left rail (watchlist / index). Hidden on small screens. */
+  sidebar?: React.ReactNode
+  children: React.ReactNode
 }
 
-export default function TerminalShell({ sidebar, main, header }: TerminalShellProps) {
+export default function TerminalShell({ sidebar, children }: TerminalShellProps) {
+  const pathname = usePathname()
+
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
-      {/* Top nav bar */}
+    <div className="flex flex-col h-dvh overflow-hidden" style={{ background: 'var(--ground)' }}>
       <nav
-        className="flex items-center gap-0 px-4 border-b flex-shrink-0 h-10"
+        className="flex items-stretch h-9 border-b shrink-0 overflow-x-auto"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+        aria-label="Primary"
       >
-        <span className="text-xs font-mono font-bold mr-6" style={{ color: 'var(--accent-amber)' }}>
+        <span
+          className="flex items-center px-3 mr-2 text-[12px] font-bold tracking-[0.14em] whitespace-nowrap select-none"
+          style={{ fontFamily: 'var(--font-display)', color: 'var(--accent)' }}
+        >
           CONFLICTWATCH
         </span>
-        {[
-          { href: '/', label: 'Map' },
-          { href: '/feed', label: 'Feed' },
-          { href: '/signals', label: 'Signals' },
-          { href: '/predictions', label: 'Predictions' },
-          { href: '/report', label: 'Report' },
-          { href: '/methodology', label: 'Methodology' },
-        ].map(({ href, label }) => (
-          <a
-            key={href}
-            href={href}
-            className="text-xs font-mono px-3 h-10 flex items-center border-r transition-colors hover:text-white"
-            style={{ color: 'var(--text-muted)', borderColor: 'var(--border)' }}
-          >
-            {label}
-          </a>
-        ))}
-        {header && <div className="ml-auto">{header}</div>}
+        {NAV.map(({ href, label }) => {
+          const active = pathname === href
+          return (
+            <Link
+              key={href}
+              href={href}
+              aria-current={active ? 'page' : undefined}
+              className="relative flex items-center px-3 text-[11px] uppercase tracking-[0.08em] whitespace-nowrap transition-colors"
+              style={{
+                fontFamily: 'var(--font-mono)',
+                color: active ? 'var(--text)' : 'var(--text-3)',
+                boxShadow: active ? 'inset 0 -2px 0 var(--accent)' : undefined,
+              }}
+            >
+              {label}
+            </Link>
+          )
+        })}
       </nav>
 
-      {/* Body: sidebar + main */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar */}
-        <aside
-          className="w-60 flex-shrink-0 border-r overflow-y-auto"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
-          {sidebar}
-        </aside>
-
-        {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-4">
-          {main}
-        </main>
+      <div className="flex flex-1 min-h-0">
+        {sidebar && (
+          <aside
+            className="hidden md:flex flex-col w-60 shrink-0 border-r overflow-y-auto"
+            style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+          >
+            {sidebar}
+          </aside>
+        )}
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col">{children}</main>
       </div>
+
+      <StatusBar />
     </div>
   )
 }

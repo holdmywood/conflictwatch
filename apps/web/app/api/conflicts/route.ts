@@ -9,6 +9,7 @@ export async function GET() {
       region: true,
       status: true,
       threatLevel: true,
+      currentSituationLine: true,
       lat: true,
       lng: true,
       updatedAt: true,

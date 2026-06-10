@@ -1,52 +1,148 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface: #111827;
-  --color-border: #1f2937;
-  --font-mono: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+  --color-surface: #161511;
+  --color-border: #2a2720;
 }
 
 :root {
-  /* ── Base surface ──────────────────────────────────── */
-  --bg:          #07090f;
-  --surface:     #0e1117;
-  --surface-2:   #161b24;
-  --border:      #1e2533;
-  --border-2:    #2a3347;
+  /* ── Ground & surfaces — warm graphite ─────────────────── */
+  --ground:        #100f0d;
+  --surface:       #161511;
+  --surface-2:     #1c1a15;
+  --border:        #2a2720;
+  --border-strong: #3d3930;
 
-  /* ── Text ──────────────────────────────────────────── */
-  --text:        #e2e8f0;
-  --text-muted:  #64748b;
-  --text-dim:    #334155;
+  /* ── Text — warm neutrals ──────────────────────────────── */
+  --text:   #e8e5dc;
+  --text-2: #a39e91;
+  --text-3: #6b675c;
 
-  /* ── Severity channel (colorblind-safe: amber→orange→violet scale) ── */
-  /* Uses amber/orange/violet — avoids red/green as sole distinguishers */
-  --sev-1: #64748b;   /* minimal  — slate      */
-  --sev-2: #ca8a04;   /* low      — amber      */
-  --sev-3: #ea580c;   /* medium   — orange     */
-  --sev-4: #7c3aed;   /* elevated — violet     */
-  --sev-5: #991b1b;   /* critical — deep red (paired with weight/icon, not sole cue) */
+  /* ── Accent — bronze. Brand, active nav, focus only. ───── */
+  --accent: #c8a24a;
 
-  /* ── Forecast channel (blue register — distinct from severity) ── */
-  --forecast-low:      #475569;   /* < 20%   */
-  --forecast-mid:      #1d4ed8;   /* 20–50%  */
-  --forecast-elevated: #4f46e5;   /* 50–75%  */
-  --forecast-high:     #818cf8;   /* > 75%   */
+  /* ── Severity channel (present state) ──────────────────────
+     Warm ramp ordered by luminance; CVD-safe because severity
+     is always paired with its S-numeral, never color alone. */
+  --sev-1: #76715f;
+  --sev-2: #a68c4b;
+  --sev-3: #c99838;
+  --sev-4: #e0742e;
+  --sev-5: #ef5b45;
 
-  /* ── Accent (AI label, unchanged amber) ── */
-  --accent-amber: #f59e0b;
+  /* ── Forecast channel (escalation probability) ─────────────
+     Cool steel→cyan; brighter = higher. Never warm, so present
+     state and forecast cannot be confused. */
+  --fc-low:  #6b7e8c;  /* < 20%  */
+  --fc-mid:  #5f9bc0;  /* 20–50% */
+  --fc-high: #74bfe3;  /* 50–75% */
+  --fc-crit: #a5dcf5;  /* > 75%  */
 
-  /* ── Remove --accent-red; it is replaced by severity tokens above ── */
+  /* ── Status (always paired with a text label) ──────────── */
+  --ok:    #86b07a;
+  --stale: #c8a24a;
+  --down:  #ef5b45;
+
+  /* ── Type ──────────────────────────────────────────────── */
+  --font-display: var(--font-archivo), 'Archivo', sans-serif;
+  --font-body: var(--font-plex-sans), 'IBM Plex Sans', sans-serif;
+  --font-mono: var(--font-plex-mono), 'IBM Plex Mono', monospace;
+}
+
+html {
+  background: var(--ground);
 }
 
 body {
-  background-color: var(--bg);
+  background: var(--ground);
   color: var(--text);
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Tabular numerics: all numbers in mono, aligned */
+::selection {
+  background: var(--accent);
+  color: var(--ground);
+}
+
+/* Visible keyboard focus, one style everywhere */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Recurring primitives ────────────────────────────────── */
+
+/* All numerics: mono, lining, tabular */
 .tabnum {
-  font-family: var(--font-mono, monospace);
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Panel chrome */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* Field label: tiny uppercase tracked */
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Terminal form controls */
+.field {
+  background: var(--ground);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.field::placeholder { color: var(--text-3); }
+.field:focus { outline: none; border-color: var(--border-strong); }
+.field:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* Scrollbars in the system's voice */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* Single composed load reveal */
+@keyframes panel-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.panel-in { animation: panel-in 240ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
