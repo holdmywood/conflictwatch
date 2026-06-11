@@ -101,6 +101,15 @@ const ADMIN1_ALTITUDE_THRESHOLD = 0.85
 
 type PathCoords = Array<[number, number]>
 
+/** Great-circle angular distance in degrees (front/back-side test). */
+function angularDistDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const r = Math.PI / 180
+  const c =
+    Math.sin(lat1 * r) * Math.sin(lat2 * r) +
+    Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lng2 - lng1) * r)
+  return Math.acos(Math.min(1, Math.max(-1, c))) / r
+}
+
 function geoJsonToPaths(geojson: {
   features: Array<{ geometry: { type: string; coordinates: unknown } }>
 }): PathCoords[] {
@@ -192,7 +201,8 @@ function makeMilitaryEl(s: MilitarySite, onClick: (s: MilitarySite) => void): HT
   const el = document.createElement('button')
   el.setAttribute('aria-label', `Military site: ${s.name}`)
   el.title = s.name
-  el.style.cssText = 'background:transparent;border:0;padding:3px;cursor:pointer;pointer-events:auto'
+  // Generous padding = invisible hit area well beyond the 9px glyph
+  el.style.cssText = 'background:transparent;border:0;padding:8px;cursor:pointer;pointer-events:auto'
   const inner = document.createElement('span')
   inner.style.cssText =
     'display:block;width:9px;height:9px;border:1.5px solid var(--accent);' +
@@ -212,7 +222,7 @@ function makeHazardEl(h: HazardPoint, onClick: (h: HazardPoint) => void): HTMLEl
   const el = document.createElement('button')
   el.setAttribute('aria-label', `${h.kind}: ${h.title}`)
   el.title = h.title
-  el.style.cssText = 'background:transparent;border:0;padding:2px;cursor:pointer;pointer-events:auto'
+  el.style.cssText = 'background:transparent;border:0;padding:8px;cursor:pointer;pointer-events:auto'
   const inner = document.createElement('span')
   const color = h.alertLevel === 'red' ? 'var(--down)' : HAZARD_COLOR
   inner.style.cssText =
@@ -229,7 +239,7 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
   const el = document.createElement('button')
   el.setAttribute('aria-label', `Hotspot: ${h.label}`)
   el.title = h.label
-  el.style.cssText = 'background:transparent;border:0;padding:2px;cursor:pointer;pointer-events:auto'
+  el.style.cssText = 'background:transparent;border:0;padding:8px;cursor:pointer;pointer-events:auto'
   const inner = document.createElement('span')
   inner.style.cssText =
     'display:block;width:11px;height:11px;transform:rotate(45deg);' +
@@ -302,11 +312,44 @@ export default function Globe({
     [conflictByNeName]
   )
 
+  // Marker click priority: markers are small and sit on top of full-coverage
+  // country polygons, so a near-miss raycasts through to the polygon and
+  // opens the country panel instead. Polygon clicks within SNAP_PX of a
+  // marker's screen position resolve to the nearest marker. Screen space, not
+  // degrees — near the limb a few pixels span tens of degrees. (Targets live
+  // in a ref so the handler sees the lens-scoped list without re-binding.)
+  const clickTargetsRef = useRef<Array<{ lat: number; lng: number; onClick: () => void }>>([])
+  const SNAP_PX = 20
+
   const handlePolygonClick = useCallback(
-    (poly: object | null) => {
+    (poly: object | null, event?: MouseEvent) => {
       if (!poly) return
       const globe = globeRef.current
       if (globe) globe.controls().autoRotate = false
+
+      if (globe && event && typeof globe.getScreenCoords === 'function') {
+        const canvas: HTMLCanvasElement | undefined = globe.renderer?.()?.domElement
+        const rect = canvas?.getBoundingClientRect()
+        if (rect) {
+          const px = event.clientX - rect.left
+          const py = event.clientY - rect.top
+          const pov = globe.pointOfView()
+          let best: { onClick: () => void } | null = null
+          let bestD = Infinity
+          for (const t of clickTargetsRef.current) {
+            // Skip far-side markers — they still project onto the screen
+            if (angularDistDeg(pov.lat, pov.lng, t.lat, t.lng) > 85) continue
+            const sc = globe.getScreenCoords(t.lat, t.lng, 0.013)
+            const d = Math.hypot(sc.x - px, sc.y - py)
+            if (d < bestD) { bestD = d; best = t }
+          }
+          if (best && bestD <= SNAP_PX) {
+            best.onClick()
+            return
+          }
+        }
+      }
+
       onSelectCountry({
         name: (poly as PolyFeature).properties.name,
         conflict: resolveConflict(poly),
@@ -383,6 +426,25 @@ export default function Globe({
     },
     [isDisasterLens, isTrackingLens, onSelectHazard, onSelectMilitarySite, onSelectHotspot]
   )
+
+  // All clickable markers of the active lens, for polygon-click snapping
+  clickTargetsRef.current = useMemo(() => {
+    const targets: Array<{ lat: number; lng: number; onClick: () => void }> = pointMarkers.map(m => ({
+      lat: m.lat, lng: m.lng, onClick: m.onClick,
+    }))
+    if (showHotspots) {
+      targets.push(...HOTSPOTS.map(h => ({ lat: h.lat, lng: h.lng, onClick: () => onSelectHotspot(h) })))
+    }
+    if (isDisasterLens) {
+      targets.push(...hazards
+        .filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
+        .map(h => ({ lat: h.lat, lng: h.lng, onClick: () => onSelectHazard(h) })))
+    }
+    if (showMilitarySites) {
+      targets.push(...MILITARY_SITES.map(s => ({ lat: s.lat, lng: s.lng, onClick: () => onSelectMilitarySite(s) })))
+    }
+    return targets
+  }, [pointMarkers, showHotspots, isDisasterLens, showMilitarySites, hazards, hazardToggleOn, onSelectHotspot, onSelectHazard, onSelectMilitarySite])
 
   // NE polygon names with an active outbreak (country spellings resolved)
   const outbreakCountries = useMemo(() => {
