@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
-import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR } from '../lib/tokens'
+import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR, AIRBASE_COLOR } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
 import { MILITARY_SITES, type MilitarySite } from '../lib/military-sites'
 import { COUNTRY_FEATURES, toNeName, type CountryPolyFeature } from '../lib/countries'
@@ -69,6 +69,8 @@ interface GlobeProps {
   hazards: HazardPoint[]
   outbreaks: Outbreak[]
   aircraft: MilitaryAircraft[]
+  /** Bulk public-record airbases (tier 'public-record') — shown on zoom. */
+  airbases: MilitarySite[]
   /** Military-bases sub-filter (country/type) applied upstream in the page. */
   siteFilter?: (s: MilitarySite) => boolean
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
@@ -223,15 +225,20 @@ function makeAircraftEl(a: MilitaryAircraft, onClick: (a: MilitaryAircraft) => v
 }
 
 function makeMilitaryEl(s: MilitarySite, onClick: (s: MilitarySite) => void): HTMLElement {
+  const bulk = s.tier === 'public-record'
   const el = document.createElement('button')
-  el.setAttribute('aria-label', `Military site: ${s.name}`)
-  el.title = s.name
-  // Generous padding = invisible hit area well beyond the 9px glyph
+  el.setAttribute('aria-label', `${bulk ? 'Airbase' : 'Military site'}: ${s.name}`)
+  el.title = `${s.name} · ${s.country}`
+  // Generous padding = invisible hit area well beyond the small glyph
   el.style.cssText = 'background:transparent;border:0;padding:8px;cursor:pointer;pointer-events:auto'
   const inner = document.createElement('span')
-  inner.style.cssText =
-    'display:block;width:9px;height:9px;border:1.5px solid var(--accent);' +
-    'box-shadow:0 0 0 1px rgba(0,0,0,0.55)'
+  // Bulk public-record airbases: slightly smaller, olive, hollow — easy to
+  // scan in numbers without competing with the bronze curated tier.
+  inner.style.cssText = bulk
+    ? `display:block;width:7px;height:7px;border:1.3px solid ${AIRBASE_COLOR};` +
+      'box-shadow:0 0 0 1px rgba(0,0,0,0.5)'
+    : 'display:block;width:9px;height:9px;border:1.5px solid var(--accent);' +
+      'box-shadow:0 0 0 1px rgba(0,0,0,0.55)'
   el.appendChild(inner)
   el.onclick = ev => { ev.stopPropagation(); onClick(s) }
   return el
@@ -275,7 +282,7 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, hazards, outbreaks, aircraft, siteFilter,
+  lens, toggles, conflicts, events, hazards, outbreaks, aircraft, airbases, siteFilter,
   conflictByNeName, selectedCountryName,
   onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard, onSelectOutbreak,
   onSelectAircraft, onSelectMilitarySite,
@@ -288,6 +295,9 @@ export default function Globe({
   // Coarse zoom bucket for layer decluttering (medium-importance bases
   // appear only when zoomed in)
   const [nearZoom, setNearZoom] = useState(false)
+  // Camera center, throttled — drives viewport selection of bulk airbases
+  const [pov, setPov] = useState({ lat: 20, lng: 10, altitude: 2.2 })
+  const povThrottle = useRef(0)
   const admin1Requested = useRef(false)
 
   useEffect(() => {
@@ -321,8 +331,14 @@ export default function Globe({
 
     // Lazy admin-1 borders on first close zoom + coarse zoom bucket
     const onChange = () => {
-      const altitude = globe.pointOfView().altitude
+      const p = globe.pointOfView()
+      const altitude = p.altitude
       setNearZoom(altitude < 1.3)
+      const now = Date.now()
+      if (now - povThrottle.current > 250) {
+        povThrottle.current = now
+        setPov({ lat: p.lat, lng: p.lng, altitude })
+      }
       if (admin1Requested.current) return
       if (altitude < ADMIN1_ALTITUDE_THRESHOLD) {
         admin1Requested.current = true
@@ -428,6 +444,23 @@ export default function Globe({
     )
   }, [showMilitarySites, siteFilter, nearZoom])
 
+  // Bulk public-record airbases: only when zoomed in, only those in view,
+  // capped to the nearest N — 1,400+ DOM markers at once would swamp both
+  // the map and the renderer.
+  const MAX_BULK_AIRBASES = 250
+  const visibleAirbases = useMemo(() => {
+    if (!showMilitarySites || !nearZoom || airbases.length === 0) return []
+    const horizonDeg = Math.min(70, (Math.acos(1 / (1 + pov.altitude)) * 180) / Math.PI + 5)
+    const inView: Array<[number, MilitarySite]> = []
+    for (const s of airbases) {
+      if (siteFilter && !siteFilter(s)) continue
+      const d = angularDistDeg(pov.lat, pov.lng, s.lat, s.lng)
+      if (d <= horizonDeg) inView.push([d, s])
+    }
+    inView.sort((a, b) => a[0] - b[0])
+    return inView.slice(0, MAX_BULK_AIRBASES).map(x => x[1])
+  }, [showMilitarySites, nearZoom, airbases, siteFilter, pov])
+
   const pointMarkers: Marker[] = useMemo(() => {
     if (showEvents) return events.map(e => eventMarker(e, onSelectEvent))
     if (isDisasterLens && toggles['earthquakes'] !== false) {
@@ -460,9 +493,9 @@ export default function Globe({
   const htmlData: object[] = useMemo(() => {
     if (showHotspots) return HOTSPOTS as unknown as object[]
     if (isDisasterLens) return hazards.filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
-    if (isTrackingLens) return [...visibleSites, ...guardedAircraft]
+    if (isTrackingLens) return [...visibleSites, ...visibleAirbases, ...guardedAircraft]
     return []
-  }, [showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, guardedAircraft])
+  }, [showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, visibleAirbases, guardedAircraft])
 
   const makeHtmlEl = useCallback(
     (d: object) => {
@@ -492,10 +525,11 @@ export default function Globe({
     }
     if (isTrackingLens) {
       targets.push(...visibleSites.map(s => ({ lat: s.lat, lng: s.lng, onClick: () => onSelectMilitarySite(s) })))
+      targets.push(...visibleAirbases.map(s => ({ lat: s.lat, lng: s.lng, onClick: () => onSelectMilitarySite(s) })))
       targets.push(...guardedAircraft.map(a => ({ lat: a.lat, lng: a.lng, onClick: () => onSelectAircraft(a) })))
     }
     return targets
-  }, [pointMarkers, showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, guardedAircraft, onSelectHotspot, onSelectHazard, onSelectMilitarySite, onSelectAircraft])
+  }, [pointMarkers, showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, visibleAirbases, guardedAircraft, onSelectHotspot, onSelectHazard, onSelectMilitarySite, onSelectAircraft])
 
   // NE polygon names with an active outbreak (country spellings resolved)
   const outbreakCountries = useMemo(() => {

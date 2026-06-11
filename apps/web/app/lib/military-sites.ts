@@ -47,6 +47,9 @@ export interface MilitarySite {
   confidence: 'high' | 'medium'
   lastUpdated: string
   reviewStatus: 'approved' | 'unreviewed'
+  /** 'curated' = the hand-reviewed strategic tier (default); 'public-record'
+   *  = bulk OurAirports-derived airbases (smaller, olive markers). */
+  tier?: 'curated' | 'public-record'
 }
 
 const PUB = ['Public record (Wikipedia/official)']

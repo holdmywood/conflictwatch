@@ -8,7 +8,7 @@
  * placeholder, never fabricated data.
  */
 
-import { SEV_COLORS, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR } from './tokens'
+import { SEV_COLORS, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR, AIRBASE_COLOR } from './tokens'
 
 export type LensId = 'conflict' | 'disasters' | 'contamination' | 'tracking'
 
@@ -101,7 +101,8 @@ export const LENSES: readonly Lens[] = [
     legend: [
       { color: AIRCRAFT_COLOR, glyph: 'dot', label: 'Military aircraft (heading-rotated)' },
       { color: 'var(--accent)', glyph: 'dot', label: 'Government/state aircraft' },
-      { color: 'var(--accent)', glyph: 'square', label: 'Military base (curated)' },
+      { color: 'var(--accent)', glyph: 'square', label: 'Strategic base (curated)' },
+      { color: AIRBASE_COLOR, glyph: 'square', label: 'Airbase — public record (zoom in)' },
     ],
   },
 ] as const

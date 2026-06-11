@@ -63,3 +63,7 @@ export const OUTBREAK_COLOR = '#b07ab0'
    the forecast blue and away from every other channel. Military assets use
    the bronze accent so they read as the highlighted subset. */
 export const AIRCRAFT_COLOR = '#8a9bb0'
+
+/* Public-record airbases (bulk tier): olive — distinct from the bronze
+   curated strategic bases and every data channel. */
+export const AIRBASE_COLOR = '#97a36e'

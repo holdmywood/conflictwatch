@@ -12,7 +12,7 @@ import Legend from './components/globe/Legend'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
 import { bindConflictsToCountries } from './lib/countries'
 import { passesDisplayGate, AIRCRAFT_ROLES, type AircraftRole } from './lib/aircraft-classify'
-import { BASE_TYPES, type BaseType, type MilitarySite } from './lib/military-sites'
+import { BASE_TYPES, MILITARY_SITES, type BaseType, type MilitarySite } from './lib/military-sites'
 import type { Signal } from './components/SignalCard'
 import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, MilitaryAircraft } from './components/Globe'
 
@@ -40,6 +40,40 @@ interface FeedEvent {
   sources: Array<{ id: string; name: string; url: string }>
 }
 
+interface BulkBase {
+  id: string
+  name: string
+  country: string
+  region: string
+  lat: number
+  lng: number
+  baseType: BaseType
+}
+
+// Adapt a public-record airbase row to the MilitarySite model with honest
+// defaults: name-evidence match, operational status unknown, nothing invented.
+function bulkBaseToSite(b: BulkBase, generatedAt: string): MilitarySite {
+  return {
+    ...b,
+    branch:
+      b.baseType === 'naval-air-station' ? 'naval'
+      : b.baseType === 'army-aviation' ? 'army'
+      : b.baseType === 'joint-base' ? 'joint'
+      : 'air',
+    operator: 'Unverified — public record',
+    status: 'unknown',
+    strategicImportance: 'medium',
+    publicDescription:
+      'Military-named airfield from public aviation records (OurAirports). Matched by name evidence only; operational status unverified.',
+    knownPublicRoles: [],
+    sources: ['OurAirports (public domain)'],
+    confidence: 'medium',
+    lastUpdated: generatedAt,
+    reviewStatus: 'unreviewed',
+    tier: 'public-record',
+  }
+}
+
 export default function GlobePage() {
   const [lensId, setLensId] = useState<LensId>('conflict')
   const lens = getLens(lensId)
@@ -56,6 +90,8 @@ export default function GlobePage() {
   const [outbreaksState, setOutbreaksState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [aircraft, setAircraft] = useState<MilitaryAircraft[]>([])
   const [aircraftState, setAircraftState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [bulkAirbases, setBulkAirbases] = useState<MilitarySite[]>([])
+  const bulkAirbasesRequested = useRef(false)
   const [selection, setSelection] = useState<Selection | null>(null)
 
   // Tracking-lens filters (military aircraft + bases)
@@ -133,6 +169,19 @@ export default function GlobePage() {
       })
       .catch(() => setAircraftState('error'))
   }, [lensId, aircraftState])
+
+  // Bulk public-record airbases (static JSON, ~200 KB) — fetched once when
+  // the tracking lens first activates
+  useEffect(() => {
+    if (lensId !== 'tracking' || bulkAirbasesRequested.current) return
+    bulkAirbasesRequested.current = true
+    fetch('/data/military-airbases.json')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { generatedAt: string; bases: BulkBase[] }) =>
+        setBulkAirbases(d.bases.map(b => bulkBaseToSite(b, d.generatedAt)))
+      )
+      .catch(() => { bulkAirbasesRequested.current = false })
+  }, [lensId])
 
   // User-facing tracking filters on top of the guard
   const filteredAircraft = useMemo(() => {
@@ -222,7 +271,7 @@ export default function GlobePage() {
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
             {aircraftState === 'loading' ? 'loading military ADS-B…'
               : aircraftState === 'error' ? 'OpenSky unreachable'
-              : `${filteredAircraft.length} military/state aircraft · OpenSky (delayed)`}
+              : `${filteredAircraft.length} military/state aircraft · ${MILITARY_SITES.length + bulkAirbases.length} bases`}
           </span>
         ) : (
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
@@ -302,6 +351,7 @@ export default function GlobePage() {
             hazards={hazards}
             outbreaks={outbreaks}
             aircraft={filteredAircraft}
+            airbases={bulkAirbases}
             siteFilter={siteFilter}
             conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
