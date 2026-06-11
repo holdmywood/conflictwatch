@@ -41,6 +41,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @conflictwatch/db generate
+      - run: pnpm --filter web test
       - run: npx tsc --noEmit
         working-directory: apps/web
       - run: pnpm --filter web build

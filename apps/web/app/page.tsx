@@ -11,8 +11,10 @@ import LensSwitcher from './components/globe/LensSwitcher'
 import Legend from './components/globe/Legend'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
 import { bindConflictsToCountries } from './lib/countries'
+import { passesDisplayGate, AIRCRAFT_ROLES, type AircraftRole } from './lib/aircraft-classify'
+import { BASE_TYPES, type BaseType, type MilitarySite } from './lib/military-sites'
 import type { Signal } from './components/SignalCard'
-import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, Aircraft } from './components/Globe'
+import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, MilitaryAircraft } from './components/Globe'
 
 const Globe = dynamic(() => import('./components/Globe'), {
   ssr: false,
@@ -52,9 +54,16 @@ export default function GlobePage() {
   const [hazardsState, setHazardsState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [outbreaks, setOutbreaks] = useState<Outbreak[]>([])
   const [outbreaksState, setOutbreaksState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
-  const [aircraft, setAircraft] = useState<Aircraft[]>([])
+  const [aircraft, setAircraft] = useState<MilitaryAircraft[]>([])
   const [aircraftState, setAircraftState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [selection, setSelection] = useState<Selection | null>(null)
+
+  // Tracking-lens filters (military aircraft + bases)
+  const [roleFilter, setRoleFilter] = useState<'' | AircraftRole>('')
+  const [confidenceFilter, setConfidenceFilter] = useState<'' | 'high'>('')
+  const [operatorFilter, setOperatorFilter] = useState('')
+  const [callsignFilter, setCallsignFilter] = useState('')
+  const [baseTypeFilter, setBaseTypeFilter] = useState<'' | BaseType>('')
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [dims, setDims] = useState({ width: 800, height: 600 })
@@ -116,9 +125,39 @@ export default function GlobePage() {
     setAircraftState('loading')
     fetch('/api/tracking/aircraft')
       .then(r => (r.ok ? r.json() : Promise.reject()))
-      .then((d: { aircraft: Aircraft[] }) => { setAircraft(d.aircraft ?? []); setAircraftState('ok') })
+      .then((d: { aircraft: MilitaryAircraft[] }) => {
+        // Frontend guard: re-apply the military/state display gate so
+        // commercial/unknown aircraft never render even if the API failed
+        setAircraft((d.aircraft ?? []).filter(passesDisplayGate))
+        setAircraftState('ok')
+      })
       .catch(() => setAircraftState('error'))
   }, [lensId, aircraftState])
+
+  // User-facing tracking filters on top of the guard
+  const filteredAircraft = useMemo(() => {
+    let list = aircraft
+    if (roleFilter) list = list.filter(a => (a.role ?? 'unknown-military') === roleFilter)
+    if (confidenceFilter) list = list.filter(a => a.confidence === confidenceFilter)
+    if (operatorFilter) {
+      const q = operatorFilter.toLowerCase()
+      list = list.filter(a =>
+        (a.operator ?? '').toLowerCase().includes(q) || a.country.toLowerCase().includes(q))
+    }
+    if (callsignFilter) {
+      const q = callsignFilter.toLowerCase()
+      list = list.filter(a => a.callsign.toLowerCase().includes(q) || a.icao24.toLowerCase().includes(q))
+    }
+    return list
+  }, [aircraft, roleFilter, confidenceFilter, operatorFilter, callsignFilter])
+
+  const siteFilter = useMemo(() => {
+    if (!baseTypeFilter && !operatorFilter) return undefined
+    const q = operatorFilter.toLowerCase()
+    return (s: MilitarySite) =>
+      (!baseTypeFilter || s.baseType === baseTypeFilter) &&
+      (!q || s.operator.toLowerCase().includes(q) || s.country.toLowerCase().includes(q))
+  }, [baseTypeFilter, operatorFilter])
 
   useEffect(() => {
     const el = containerRef.current
@@ -181,9 +220,9 @@ export default function GlobePage() {
           </span>
         ) : lensId === 'tracking' ? (
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
-            {aircraftState === 'loading' ? 'loading ADS-B…'
+            {aircraftState === 'loading' ? 'loading military ADS-B…'
               : aircraftState === 'error' ? 'OpenSky unreachable'
-              : `${aircraft.length} aircraft · OpenSky`}
+              : `${filteredAircraft.length} military/state aircraft · OpenSky (delayed)`}
           </span>
         ) : (
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
@@ -206,6 +245,54 @@ export default function GlobePage() {
             }))
           }
         />
+        {lensId === 'tracking' && (
+          <div
+            className="flex items-center gap-1.5 h-8 px-2 border-b shrink-0 overflow-x-auto"
+            style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+          >
+            <select
+              value={roleFilter}
+              onChange={e => setRoleFilter(e.target.value as '' | AircraftRole)}
+              className="field" style={{ fontSize: 10, padding: '2px 4px' }}
+              aria-label="Aircraft role"
+            >
+              <option value="">All roles</option>
+              {AIRCRAFT_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <select
+              value={confidenceFilter}
+              onChange={e => setConfidenceFilter(e.target.value as '' | 'high')}
+              className="field" style={{ fontSize: 10, padding: '2px 4px' }}
+              aria-label="Classification confidence"
+            >
+              <option value="">High + medium confidence</option>
+              <option value="high">High confidence only</option>
+            </select>
+            <input
+              value={operatorFilter}
+              onChange={e => setOperatorFilter(e.target.value)}
+              placeholder="Operator/country…"
+              className="field" style={{ width: 120, fontSize: 10, padding: '2px 4px' }}
+              aria-label="Filter by operator or country"
+            />
+            <input
+              value={callsignFilter}
+              onChange={e => setCallsignFilter(e.target.value)}
+              placeholder="Callsign/hex…"
+              className="field" style={{ width: 100, fontSize: 10, padding: '2px 4px' }}
+              aria-label="Filter by callsign or ICAO hex"
+            />
+            <select
+              value={baseTypeFilter}
+              onChange={e => setBaseTypeFilter(e.target.value as '' | BaseType)}
+              className="field" style={{ fontSize: 10, padding: '2px 4px' }}
+              aria-label="Base type"
+            >
+              <option value="">All base types</option>
+              {BASE_TYPES.map(t => <option key={t} value={t}>{t.replaceAll('-', ' ')}</option>)}
+            </select>
+          </div>
+        )}
         <div ref={containerRef} className="relative flex-1 min-h-0">
           <Globe
             lens={lensId}
@@ -214,7 +301,8 @@ export default function GlobePage() {
             events={blips}
             hazards={hazards}
             outbreaks={outbreaks}
-            aircraft={aircraft}
+            aircraft={filteredAircraft}
+            siteFilter={siteFilter}
             conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
             onSelectCountry={c => setSelection({ type: 'country', name: c.name, conflict: c.conflict })}
@@ -228,6 +316,18 @@ export default function GlobePage() {
             containerHeight={dims.height}
           />
           <Legend lens={lens} />
+          {lensId === 'tracking' && aircraftState === 'ok' && toggles['aircraft'] !== false && filteredAircraft.length === 0 && (
+            <div className="absolute inset-x-0 top-0 z-10 flex justify-center pointer-events-none" role="status">
+              <div
+                className="mt-3 px-3 py-2 border rounded-[2px] max-w-md text-center"
+                style={{ background: 'rgba(22, 21, 17, 0.94)', borderColor: 'var(--border-strong)' }}
+              >
+                <p className="text-[11px]" style={{ color: 'var(--text-2)' }}>
+                  No publicly classified military/state aircraft currently visible for this area.
+                </p>
+              </div>
+            </div>
+          )}
           {lensId === 'tracking' && (toggles['vessels'] || toggles['missile-events']) && (
             <div className="absolute bottom-2 right-2 z-10 max-w-xs px-2 py-1.5 border rounded-[2px]"
               style={{ background: 'rgba(22, 21, 17, 0.92)', borderColor: 'var(--border)' }}>

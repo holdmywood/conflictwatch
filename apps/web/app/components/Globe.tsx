@@ -6,6 +6,8 @@ import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR } from '../lib/t
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
 import { MILITARY_SITES, type MilitarySite } from '../lib/military-sites'
 import { COUNTRY_FEATURES, toNeName, type CountryPolyFeature } from '../lib/countries'
+import { passesDisplayGate } from '../lib/aircraft-classify'
+import type { MilitaryAircraft } from '../lib/adsb'
 import type { LensId } from '../lib/lenses'
 
 export interface HazardPoint {
@@ -32,17 +34,9 @@ export interface Outbreak {
   source: string
 }
 
-export interface Aircraft {
-  icao24: string
-  callsign: string
-  originCountry: string
-  lat: number
-  lng: number
-  baroAltitudeM: number | null
-  velocityMs: number | null
-  trueTrack: number | null
-  onGround: boolean
-}
+// Canonical military aircraft model lives with the provider (type-only
+// import — no server code reaches the client bundle).
+export type { MilitaryAircraft } from '../lib/adsb'
 
 export interface ConflictPoint {
   id: string
@@ -74,7 +68,9 @@ interface GlobeProps {
   events: EventBlip[]
   hazards: HazardPoint[]
   outbreaks: Outbreak[]
-  aircraft: Aircraft[]
+  aircraft: MilitaryAircraft[]
+  /** Military-bases sub-filter (country/type) applied upstream in the page. */
+  siteFilter?: (s: MilitarySite) => boolean
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
   conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
@@ -83,7 +79,7 @@ interface GlobeProps {
   onSelectHotspot: (h: Hotspot) => void
   onSelectHazard: (h: HazardPoint) => void
   onSelectOutbreak: (o: Outbreak) => void
-  onSelectAircraft: (a: Aircraft) => void
+  onSelectAircraft: (a: MilitaryAircraft) => void
   onSelectMilitarySite: (s: MilitarySite) => void
   containerWidth?: number
   containerHeight?: number
@@ -184,17 +180,46 @@ function outbreakMarkers(o: Outbreak, onSelect: (o: Outbreak) => void): Marker[]
   }))
 }
 
-function aircraftMarker(a: Aircraft, onSelect: (a: Aircraft) => void): Marker {
-  const alt = a.baroAltitudeM !== null ? `${Math.round(a.baroAltitudeM)} m` : 'alt n/a'
-  return {
-    lat: a.lat,
-    lng: a.lng,
-    color: AIRCRAFT_COLOR,
-    radius: 0.16,
-    label: tooltip(a.callsign || a.icao24, `${a.originCountry} · ${alt}`),
-    onClick: () => onSelect(a),
-    flyTo: false,
+// Clean plane silhouette, drawn pointing north; rotated to the true track.
+const PLANE_PATH =
+  'M12 2 L13.5 9 L21 12.5 L21 14 L13.5 12.5 L13 18 L15.5 20 L15.5 21.5 L12 20.5 L8.5 21.5 L8.5 20 L11 18 L10.5 12.5 L3 14 L3 12.5 L10.5 9 Z'
+
+function makeAircraftEl(a: MilitaryAircraft, onClick: (a: MilitaryAircraft) => void): HTMLElement {
+  const el = document.createElement('button')
+  const roleLabel = a.role ?? 'unknown-military'
+  el.setAttribute('aria-label', `Aircraft: ${a.callsign || a.icao24} (${roleLabel})`)
+  // Hover tooltip: callsign · role · operator
+  el.title = `${a.callsign || a.icao24} · ${roleLabel}${a.operator ? ` · ${a.operator}` : ''}`
+  el.style.cssText = 'background:transparent;border:0;padding:7px;cursor:pointer;pointer-events:auto'
+
+  // Role styling, kept subtle: state/government in the accent bronze, UAVs
+  // hollow, everything else in the aircraft steel-blue. Shape stays constant
+  // so the map reads calmly; role detail lives in tooltip + panel.
+  const isState = a.classification === 'state' || a.role === 'government'
+  const isUav = a.role === 'uav'
+  const color = isState ? 'var(--accent)' : AIRCRAFT_COLOR
+  const rotation = a.heading !== null ? a.heading : 0
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', '15')
+  svg.setAttribute('height', '15')
+  svg.style.cssText =
+    `display:block;transform:rotate(${rotation}deg);` +
+    'filter:drop-shadow(0 0 1px rgba(0,0,0,0.9))'
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', PLANE_PATH)
+  if (isUav) {
+    path.setAttribute('fill', 'none')
+    path.setAttribute('stroke', color)
+    path.setAttribute('stroke-width', '1.6')
+  } else {
+    path.setAttribute('fill', color)
   }
+  svg.appendChild(path)
+  el.appendChild(svg)
+  el.onclick = ev => { ev.stopPropagation(); onClick(a) }
+  return el
 }
 
 function makeMilitaryEl(s: MilitarySite, onClick: (s: MilitarySite) => void): HTMLElement {
@@ -250,7 +275,8 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 }
 
 export default function Globe({
-  lens, toggles, conflicts, events, hazards, outbreaks, aircraft, conflictByNeName, selectedCountryName,
+  lens, toggles, conflicts, events, hazards, outbreaks, aircraft, siteFilter,
+  conflictByNeName, selectedCountryName,
   onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard, onSelectOutbreak,
   onSelectAircraft, onSelectMilitarySite,
   containerWidth, containerHeight,
@@ -259,6 +285,9 @@ export default function Globe({
   const [winDims, setWinDims] = useState({ width: 1920, height: 1080 })
   const [hoverPoly, setHoverPoly] = useState<object | null>(null)
   const [admin1Paths, setAdmin1Paths] = useState<PathCoords[]>([])
+  // Coarse zoom bucket for layer decluttering (medium-importance bases
+  // appear only when zoomed in)
+  const [nearZoom, setNearZoom] = useState(false)
   const admin1Requested = useRef(false)
 
   useEffect(() => {
@@ -290,10 +319,11 @@ export default function Globe({
     controls.maxDistance = 480
     controls.zoomSpeed = 0.6
 
-    // Lazy admin-1 borders on first close zoom
+    // Lazy admin-1 borders on first close zoom + coarse zoom bucket
     const onChange = () => {
-      if (admin1Requested.current) return
       const altitude = globe.pointOfView().altitude
+      setNearZoom(altitude < 1.3)
+      if (admin1Requested.current) return
       if (altitude < ADMIN1_ALTITUDE_THRESHOLD) {
         admin1Requested.current = true
         fetch(ADMIN1_URL)
@@ -382,15 +412,30 @@ export default function Globe({
   const showAircraft = isTrackingLens && toggles['aircraft'] !== false
   const showMilitarySites = isTrackingLens && toggles['military-sites'] !== false
 
+  // Frontend guard: even if the API filter failed, non-military/state or
+  // low-confidence aircraft never render.
+  const guardedAircraft = useMemo(
+    () => (showAircraft ? aircraft.filter(passesDisplayGate) : []),
+    [showAircraft, aircraft]
+  )
+
+  // Military bases: page-level filters + zoom declutter (medium-importance
+  // bases appear only when zoomed in)
+  const visibleSites = useMemo(() => {
+    if (!showMilitarySites) return []
+    return MILITARY_SITES.filter(
+      s => (siteFilter ? siteFilter(s) : true) && (s.strategicImportance === 'high' || nearZoom)
+    )
+  }, [showMilitarySites, siteFilter, nearZoom])
+
   const pointMarkers: Marker[] = useMemo(() => {
     if (showEvents) return events.map(e => eventMarker(e, onSelectEvent))
     if (isDisasterLens && toggles['earthquakes'] !== false) {
       return hazards.filter(h => h.kind === 'earthquake').map(h => quakeMarker(h, onSelectHazard))
     }
     if (showOutbreaks) return outbreaks.flatMap(o => outbreakMarkers(o, onSelectOutbreak))
-    if (showAircraft) return aircraft.map(a => aircraftMarker(a, onSelectAircraft))
     return []
-  }, [showEvents, isDisasterLens, showOutbreaks, showAircraft, events, hazards, outbreaks, aircraft, toggles, onSelectEvent, onSelectHazard, onSelectOutbreak, onSelectAircraft])
+  }, [showEvents, isDisasterLens, showOutbreaks, events, hazards, outbreaks, toggles, onSelectEvent, onSelectHazard, onSelectOutbreak])
 
   // Pulse rings: S4+ events, red-alert hazards, or all outbreak points
   const ringMarkers: Marker[] = useMemo(() => {
@@ -410,21 +455,26 @@ export default function Globe({
     [toggles]
   )
 
-  // DOM markers: hotspot diamonds, non-quake hazard glyphs, or military squares
+  // DOM markers: hotspot diamonds, non-quake hazard glyphs, or the tracking
+  // lens's bases + military aircraft (both DOM so aircraft can rotate)
   const htmlData: object[] = useMemo(() => {
     if (showHotspots) return HOTSPOTS as unknown as object[]
     if (isDisasterLens) return hazards.filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
-    if (showMilitarySites) return MILITARY_SITES as unknown as object[]
+    if (isTrackingLens) return [...visibleSites, ...guardedAircraft]
     return []
-  }, [showHotspots, isDisasterLens, showMilitarySites, hazards, hazardToggleOn])
+  }, [showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, guardedAircraft])
 
   const makeHtmlEl = useCallback(
     (d: object) => {
       if (isDisasterLens) return makeHazardEl(d as HazardPoint, onSelectHazard)
-      if (isTrackingLens) return makeMilitaryEl(d as MilitarySite, onSelectMilitarySite)
+      if (isTrackingLens) {
+        return 'icao24' in d
+          ? makeAircraftEl(d as MilitaryAircraft, onSelectAircraft)
+          : makeMilitaryEl(d as MilitarySite, onSelectMilitarySite)
+      }
       return makeHotspotEl(d as Hotspot, onSelectHotspot)
     },
-    [isDisasterLens, isTrackingLens, onSelectHazard, onSelectMilitarySite, onSelectHotspot]
+    [isDisasterLens, isTrackingLens, onSelectHazard, onSelectAircraft, onSelectMilitarySite, onSelectHotspot]
   )
 
   // All clickable markers of the active lens, for polygon-click snapping
@@ -440,11 +490,12 @@ export default function Globe({
         .filter(h => h.kind !== 'earthquake' && hazardToggleOn(h))
         .map(h => ({ lat: h.lat, lng: h.lng, onClick: () => onSelectHazard(h) })))
     }
-    if (showMilitarySites) {
-      targets.push(...MILITARY_SITES.map(s => ({ lat: s.lat, lng: s.lng, onClick: () => onSelectMilitarySite(s) })))
+    if (isTrackingLens) {
+      targets.push(...visibleSites.map(s => ({ lat: s.lat, lng: s.lng, onClick: () => onSelectMilitarySite(s) })))
+      targets.push(...guardedAircraft.map(a => ({ lat: a.lat, lng: a.lng, onClick: () => onSelectAircraft(a) })))
     }
     return targets
-  }, [pointMarkers, showHotspots, isDisasterLens, showMilitarySites, hazards, hazardToggleOn, onSelectHotspot, onSelectHazard, onSelectMilitarySite])
+  }, [pointMarkers, showHotspots, isDisasterLens, isTrackingLens, hazards, hazardToggleOn, visibleSites, guardedAircraft, onSelectHotspot, onSelectHazard, onSelectMilitarySite, onSelectAircraft])
 
   // NE polygon names with an active outbreak (country spellings resolved)
   const outbreakCountries = useMemo(() => {

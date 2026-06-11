@@ -69,12 +69,15 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+      vitest:
+        specifier: ^1.6.1
+        version: 1.6.1(@types/node@20.19.41)(jsdom@29.1.1)(lightningcss@1.32.0)
 
   apps/worker:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: latest
-        version: 0.103.0
+        version: 0.104.1
       '@conflictwatch/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -147,8 +150,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/sdk@0.103.0':
-    resolution: {integrity: sha512-1uG7RNgoHTUxzOXqSCODKt0UTVlxWiHk/2Tt2/uQJiPW7XzBeKVuJyd3Aw6T3LPyvZV/jDTnPLX7SaM70WLLjA==}
+  '@anthropic-ai/sdk@0.104.1':
+    resolution: {integrity: sha512-gGACa/+IaiXzRRmF96aOhamoBgapKRBiFWbmmTFP8aMkpaEcuStF+Q61bjo4vPxBM7gqWJNZqsngslRdnLHv0Q==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -2023,7 +2026,7 @@ snapshots:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
 
-  '@anthropic-ai/sdk@0.103.0':
+  '@anthropic-ai/sdk@0.104.1':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0

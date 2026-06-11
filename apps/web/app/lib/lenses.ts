@@ -29,6 +29,8 @@ export interface SubToggle {
 export interface Lens {
   id: LensId
   label: string
+  /** Honesty notice rendered with the legend (e.g. what is deliberately hidden). */
+  notice?: string
   /** 'live' renders data; 'pending-source' renders a labeled empty state. */
   status: 'live' | 'pending-source'
   /** Shown in the placeholder for pending lenses — names the real source. */
@@ -89,15 +91,17 @@ export const LENSES: readonly Lens[] = [
     id: 'tracking',
     label: 'Tracking',
     status: 'live',
+    notice: 'Showing publicly available military/state aircraft only. Commercial aircraft are hidden.',
     subToggles: [
-      { id: 'aircraft', label: 'Aircraft (ADS-B)', defaultOn: true },
-      { id: 'military-sites', label: 'Military sites', defaultOn: true },
+      { id: 'aircraft', label: 'Military aircraft (ADS-B)', defaultOn: true },
+      { id: 'military-sites', label: 'Military bases', defaultOn: true },
       { id: 'vessels', label: 'Vessels (AIS key)', defaultOn: false },
       { id: 'missile-events', label: 'Missile events', defaultOn: false },
     ],
     legend: [
-      { color: AIRCRAFT_COLOR, glyph: 'dot', label: 'Aircraft (ADS-B)' },
-      { color: 'var(--accent)', glyph: 'square', label: 'Military site (curated)' },
+      { color: AIRCRAFT_COLOR, glyph: 'dot', label: 'Military aircraft (heading-rotated)' },
+      { color: 'var(--accent)', glyph: 'dot', label: 'Government/state aircraft' },
+      { color: 'var(--accent)', glyph: 'square', label: 'Military base (curated)' },
     ],
   },
 ] as const

@@ -6,7 +6,7 @@ import SevMark from './SevMark'
 import ConflictPanel from './ConflictPanel'
 import { fmtPct, fmtUTC, forecastColor } from '../lib/tokens'
 import type { Signal } from './SignalCard'
-import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, Aircraft } from './Globe'
+import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, MilitaryAircraft } from './Globe'
 import type { Hotspot } from '../lib/hotspots'
 import type { MilitarySite } from '../lib/military-sites'
 
@@ -21,7 +21,7 @@ export type Selection =
   | { type: 'hotspot'; hotspot: Hotspot }
   | { type: 'hazard'; hazard: HazardPoint }
   | { type: 'outbreak'; outbreak: Outbreak }
-  | { type: 'aircraft'; aircraft: Aircraft }
+  | { type: 'aircraft'; aircraft: MilitaryAircraft }
   | { type: 'militarySite'; site: MilitarySite }
 
 interface DetailPanelProps {
@@ -330,20 +330,33 @@ function HazardTabs({ tab, hazard }: { tab: string; hazard: HazardPoint }) {
 
 /* ── Aircraft & military site ─────────────────────────────────────────────── */
 
-function AircraftTab({ aircraft }: { aircraft: Aircraft }) {
+function AircraftTab({ aircraft }: { aircraft: MilitaryAircraft }) {
   return (
-    <div className="p-2.5 space-y-1">
+    <div className="p-2.5 space-y-2">
+      <div className="label">Classification</div>
+      <dl className="space-y-1">
+        <ProvRow k="Class" v={`${aircraft.classification} (confidence ${aircraft.confidence})`} />
+        <ProvRow k="Role" v={aircraft.role ?? 'unknown-military'} />
+        {aircraft.operator && <ProvRow k="Operator" v={aircraft.operator} />}
+        <ProvRow k="Basis" v={aircraft.classificationReason} />
+      </dl>
+      <div className="label pt-1.5 border-t" style={{ borderColor: 'var(--border)' }}>Aircraft</div>
       <dl className="space-y-1">
         <ProvRow k="Callsign" v={aircraft.callsign || '—'} />
-        <ProvRow k="ICAO24" v={aircraft.icao24} />
-        <ProvRow k="Origin" v={aircraft.originCountry} />
-        <ProvRow k="Position" v={`${aircraft.lat.toFixed(2)}, ${aircraft.lng.toFixed(2)}`} />
-        <ProvRow k="Altitude" v={aircraft.baroAltitudeM !== null ? `${Math.round(aircraft.baroAltitudeM)} m` : 'n/a'} />
-        <ProvRow k="Velocity" v={aircraft.velocityMs !== null ? `${Math.round(aircraft.velocityMs)} m/s` : 'n/a'} />
-        <ProvRow k="On ground" v={aircraft.onGround ? 'yes' : 'no'} />
+        <ProvRow k="ICAO hex" v={aircraft.icao24} />
+        <ProvRow k="Type" v={aircraft.aircraftType ?? 'not provided by source'} />
+        <ProvRow k="Registration" v={aircraft.registration ?? 'not provided by source'} />
+        <ProvRow k="Reg. country" v={aircraft.country} />
+        <ProvRow k="Position" v={`${aircraft.lat.toFixed(2)}, ${aircraft.lng.toFixed(2)} (~1 km precision)`} />
+        <ProvRow k="Altitude" v={aircraft.altitudeM !== null ? `${Math.round(aircraft.altitudeM)} m` : 'n/a'} />
+        <ProvRow k="Speed" v={aircraft.speedMs !== null ? `${Math.round(aircraft.speedMs)} m/s` : 'n/a'} />
+        <ProvRow k="Heading" v={aircraft.heading !== null ? `${Math.round(aircraft.heading)}°` : 'n/a'} />
+        <ProvRow k="Last seen" v={fmtUTC(aircraft.lastSeen)} />
+        <ProvRow k="Source" v={`${aircraft.source} (delayed snapshot)`} />
       </dl>
       <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
-        ADS-B via OpenSky. Military aircraft often do not broadcast — coverage is partial.
+        Publicly broadcast military/state aircraft only. Many military flights do not
+        broadcast ADS-B — coverage is partial. Display only; no route prediction.
       </p>
     </div>
   )
@@ -351,19 +364,29 @@ function AircraftTab({ aircraft }: { aircraft: Aircraft }) {
 
 function MilitarySiteTab({ site }: { site: MilitarySite }) {
   return (
-    <div className="p-2.5 space-y-1">
+    <div className="p-2.5 space-y-2">
+      <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{site.publicDescription}</p>
       <dl className="space-y-1">
-        <ProvRow k="Site" v={site.name} />
         <ProvRow k="Country" v={site.country} />
+        <ProvRow k="Region" v={site.region} />
         <ProvRow k="Branch" v={site.branch} />
         <ProvRow k="Operator" v={site.operator} />
+        <ProvRow k="Type" v={site.baseType.replaceAll('-', ' ')} />
+        <ProvRow k="Status" v={site.status} />
+        <ProvRow k="Importance" v={site.strategicImportance} />
         <ProvRow k="Position" v={`${site.lat.toFixed(2)}, ${site.lng.toFixed(2)}`} />
+        {site.knownPublicRoles.length > 0 && (
+          <ProvRow k="Public roles" v={site.knownPublicRoles.join('; ')} />
+        )}
+        <ProvRow k="Sources" v={site.sources.join('; ')} />
+        <ProvRow k="Confidence" v={site.confidence} />
+        <ProvRow k="Updated" v={site.lastUpdated} />
       </dl>
-      {site.reviewStatus === 'unreviewed' && (
-        <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
-          Curated from open sources; awaiting editorial review. The set is a small seed, not an order of battle.
-        </p>
-      )}
+      <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
+        Publicly documented installations only; roles are long-standing public record,
+        not claims about current deployments.
+        {site.reviewStatus === 'unreviewed' && ' Awaiting editorial review.'}
+      </p>
     </div>
   )
 }

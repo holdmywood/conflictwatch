@@ -36,6 +36,11 @@ export default function Legend({ lens }: { lens: Lens }) {
           </li>
         ))}
       </ul>
+      {lens.notice && (
+        <p className="text-[9.5px] mt-1.5 pt-1.5 border-t max-w-[200px] leading-snug" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
+          {lens.notice}
+        </p>
+      )}
     </div>
   )
 }

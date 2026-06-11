@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
-import { fetchAircraft } from '../../../lib/adsb'
+import { fetchMilitaryAircraft } from '../../../lib/adsb'
 import { rateLimit, clientKey } from '../../../lib/rate-limit'
 
 /**
- * Global ADS-B snapshot from OpenSky. Public + anonymous but heavily
- * rate-limited, so this is rate-limited per client and CDN-cached for 30s.
- * An optional bbox (lamin/lamax/lomin/lomax) narrows the query.
+ * Military/state aircraft snapshot from OpenSky ADS-B. Commercial, private,
+ * and unclassifiable aircraft are filtered server-side before anything
+ * reaches the client (see lib/aircraft-classify.ts). Delayed snapshot with
+ * reduced precision — display only, no route prediction or tasking.
+ *
+ * ?includeUnclassified=1 bypasses the filter for local debugging ONLY; the
+ * route refuses it outside development.
  */
 export async function GET(req: Request) {
   const limit = rateLimit(`adsb:${clientKey(req)}`, 6, 60_000)
@@ -28,14 +32,29 @@ export async function GET(req: Request) {
     lngMax: num('lomax', 170),
   }
 
+  const wantsUnclassified = url.searchParams.get('includeUnclassified') === '1'
+  if (wantsUnclassified && process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      { error: 'includeUnclassified is a development-only debug flag.' },
+      { status: 403 }
+    )
+  }
+
   try {
-    const snapshot = await fetchAircraft(bbox)
+    const snapshot = await fetchMilitaryAircraft(bbox, { includeUnclassified: wantsUnclassified })
     return NextResponse.json(snapshot, {
       headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60' },
     })
   } catch {
     return NextResponse.json(
-      { aircraft: [], source: 'OpenSky', asOf: new Date().toISOString(), note: 'OpenSky unavailable or rate-limited; no aircraft shown.' },
+      {
+        aircraft: [],
+        totalSeen: 0,
+        source: 'OpenSky',
+        delayed: true,
+        asOf: new Date().toISOString(),
+        note: 'OpenSky unavailable or rate-limited; no aircraft shown.',
+      },
       { status: 200 }
     )
   }
