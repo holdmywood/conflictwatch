@@ -146,3 +146,25 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Hotspot markers: compact dot, pulse only on hover/select ──────────── */
+.hotspot-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 4px 1px rgba(200, 162, 74, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.6);
+  transition: box-shadow 200ms ease, transform 200ms ease;
+}
+.hotspot-marker:hover .hotspot-dot {
+  box-shadow: 0 0 9px 3px rgba(227, 194, 122, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.6);
+  transform: scale(1.15);
+}
+.hotspot-dot.selected {
+  animation: hotspot-pulse 2.4s ease-in-out infinite;
+}
+@keyframes hotspot-pulse {
+  0%, 100% { box-shadow: 0 0 5px 1px rgba(227, 194, 122, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.6); }
+  50% { box-shadow: 0 0 12px 5px rgba(227, 194, 122, 0.75), 0 0 0 1px rgba(0, 0, 0, 0.6); }
+}

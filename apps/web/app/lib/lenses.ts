@@ -46,6 +46,7 @@ export const LENSES: readonly Lens[] = [
     status: 'live',
     subToggles: [
       { id: 'events', label: 'Event blips', defaultOn: true },
+      { id: 'heat', label: 'Heat layer', defaultOn: true },
       { id: 'hotspots', label: 'Hotspots', defaultOn: true },
     ],
     legend: [
@@ -54,7 +55,8 @@ export const LENSES: readonly Lens[] = [
       { color: SEV_COLORS[3], glyph: 'dot', label: 'S3 medium' },
       { color: SEV_COLORS[4], glyph: 'dot', label: 'S4 elevated' },
       { color: SEV_COLORS[5], glyph: 'dot', label: 'S5 critical' },
-      { color: 'var(--accent)', glyph: 'diamond', label: 'Strategic hotspot' },
+      { color: SEV_COLORS[3], glyph: 'ring', label: 'Conflict heat — severity glow' },
+      { color: 'var(--accent)', glyph: 'dot', label: 'Strategic hotspot' },
     ],
   },
   {

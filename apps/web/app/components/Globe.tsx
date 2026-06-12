@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
 import GlobeGL from 'react-globe.gl'
+import {
+  AmbientLight, DirectionalLight, Color, CanvasTexture, Sprite, SpriteMaterial,
+  MeshPhongMaterial, AdditiveBlending, type Object3D,
+} from 'three'
 import { sevColor, HAZARD_COLOR, OUTBREAK_COLOR, AIRCRAFT_COLOR, AIRBASE_COLOR } from '../lib/tokens'
 import { HOTSPOTS, type Hotspot } from '../lib/hotspots'
 import { MILITARY_SITES, type MilitarySite } from '../lib/military-sites'
@@ -73,6 +77,8 @@ interface GlobeProps {
   airbases: MilitarySite[]
   /** Military-bases sub-filter (country/type) applied upstream in the page. */
   siteFilter?: (s: MilitarySite) => boolean
+  /** Selected hotspot zone — drives the pulse animation on its marker. */
+  selectedHotspotZone?: string | null
   /** Conflict per Natural Earth country name — bound by point-in-polygon upstream. */
   conflictByNeName: Map<string, ConflictPoint>
   selectedCountryName: string | null
@@ -98,6 +104,81 @@ const ADMIN1_URL =
 const ADMIN1_ALTITUDE_THRESHOLD = 0.85
 
 type PathCoords = Array<[number, number]>
+
+/* ── Visual identity: gold-on-charcoal intelligence globe ─────────────────────
+   The base texture is NASA's night-lights composite multiplied by a warm gold
+   material color: oceans stay near-black, city lights render gold, and the
+   topology bump map gives subtle terrain relief under warm directional light.
+   Country borders, atmosphere rim, arcs, and particles all share the brand
+   gold so the globe reads as one object, not a stack of layers. */
+
+const GOLD = '#c8a24a'
+const GOLD_BRIGHT = '#e3c27a'
+
+// Intelligence-network arc hubs (capital-city coordinates, public knowledge).
+const ARC_HUBS: Record<string, [number, number]> = {
+  washington: [38.9, -77.04],
+  london: [51.5, -0.12],
+  brussels: [50.85, 4.35],
+  moscow: [55.75, 37.62],
+  beijing: [39.9, 116.4],
+  tokyo: [35.68, 139.69],
+  singapore: [1.35, 103.82],
+  telaviv: [32.08, 34.78],
+  riyadh: [24.71, 46.68],
+  newdelhi: [28.61, 77.21],
+}
+
+const ARC_PAIRS: Array<[string, string]> = [
+  ['washington', 'london'], ['london', 'brussels'], ['washington', 'tokyo'],
+  ['london', 'newdelhi'], ['brussels', 'telaviv'], ['washington', 'riyadh'],
+  ['tokyo', 'singapore'], ['singapore', 'newdelhi'], ['moscow', 'beijing'],
+  ['london', 'telaviv'], ['beijing', 'singapore'], ['washington', 'brussels'],
+  ['riyadh', 'newdelhi'], ['moscow', 'newdelhi'],
+]
+
+interface NetworkArc {
+  startLat: number; startLng: number; endLat: number; endLng: number; t: number
+}
+
+const NETWORK_ARCS: NetworkArc[] = ARC_PAIRS.map(([a, b], i) => ({
+  startLat: ARC_HUBS[a][0], startLng: ARC_HUBS[a][1],
+  endLat: ARC_HUBS[b][0], endLng: ARC_HUBS[b][1],
+  t: i,
+}))
+
+// Sparse ambient particle field — intelligence traffic ambience. Static
+// points; the globe's own slow rotation provides the motion parallax.
+const PARTICLE_FIELD = (() => {
+  const pts: Array<{ lat: number; lng: number; alt: number }> = []
+  let seed = 42
+  const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 }
+  for (let i = 0; i < 130; i++) {
+    pts.push({
+      lat: (rand() - 0.5) * 150,
+      lng: (rand() - 0.5) * 360,
+      alt: 0.25 + rand() * 0.45,
+    })
+  }
+  return pts
+})()
+
+// Soft radial glow texture, shared by all conflict-heat sprites
+let glowTexture: CanvasTexture | null = null
+function getGlowTexture(): CanvasTexture {
+  if (glowTexture) return glowTexture
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64)
+  g.addColorStop(0, 'rgba(255,255,255,0.85)')
+  g.addColorStop(0.35, 'rgba(255,255,255,0.28)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 128, 128)
+  glowTexture = new CanvasTexture(c)
+  return glowTexture
+}
 
 /** Great-circle angular distance in degrees (front/back-side test). */
 function angularDistDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -265,17 +346,18 @@ function makeHazardEl(h: HazardPoint, onClick: (h: HazardPoint) => void): HTMLEl
   return el
 }
 
-function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
-  // globe.gl positions the outer element via transform — the rotation must
-  // live on an inner element or it gets clobbered.
+function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void, selected: boolean): HTMLElement {
+  // Refined hotspot: small gold center dot with a soft glow. The pulse
+  // animation runs only while hovered or selected (CSS in globals.css);
+  // at rest the footprint stays compact and quiet.
   const el = document.createElement('button')
   el.setAttribute('aria-label', `Hotspot: ${h.label}`)
+  el.setAttribute('data-hotspot-zone', h.zone)
   el.title = h.label
+  el.className = 'hotspot-marker'
   el.style.cssText = 'background:transparent;border:0;padding:8px;cursor:pointer;pointer-events:auto'
   const inner = document.createElement('span')
-  inner.style.cssText =
-    'display:block;width:11px;height:11px;transform:rotate(45deg);' +
-    'border:1.5px solid var(--accent);box-shadow:0 0 0 1px rgba(0,0,0,0.55)'
+  inner.className = selected ? 'hotspot-dot selected' : 'hotspot-dot'
   el.appendChild(inner)
   el.onclick = ev => { ev.stopPropagation(); onClick(h) }
   return el
@@ -283,6 +365,7 @@ function makeHotspotEl(h: Hotspot, onClick: (h: Hotspot) => void): HTMLElement {
 
 export default function Globe({
   lens, toggles, conflicts, events, hazards, outbreaks, aircraft, airbases, siteFilter,
+  selectedHotspotZone = null,
   conflictByNeName, selectedCountryName,
   onSelectCountry, onSelectEvent, onSelectHotspot, onSelectHazard, onSelectOutbreak,
   onSelectAircraft, onSelectMilitarySite,
@@ -299,6 +382,12 @@ export default function Globe({
   const [pov, setPov] = useState({ lat: 20, lng: 10, altitude: 2.2 })
   const povThrottle = useRef(0)
   const admin1Requested = useRef(false)
+  const [reduceMotion, setReduceMotion] = useState(false)
+  useEffect(() => {
+    setReduceMotion(window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  }, [])
+  // Network arcs are global-view ambience only — gone once you work a region
+  const farZoom = pov.altitude > 1.55
 
   useEffect(() => {
     if (containerWidth !== undefined) return
@@ -315,11 +404,23 @@ export default function Globe({
 
   // Camera setup: inertial damping, zoom caps so the 4k texture never
   // degrades into visible pixels, gentle auto-rotate unless reduced motion.
+  // Material + lights tuned to the gold-on-charcoal identity: night-lights
+  // texture multiplied by warm gold, raised bump relief, warm key light.
   useEffect(() => {
     const globe = globeRef.current
     if (!globe) return
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     globe.pointOfView({ lat: 20, lng: 10, altitude: 2.2 }, reduceMotion ? 0 : 1000)
+
+    globe.lights([
+      new AmbientLight(0xccb288, 2.2),
+      (() => {
+        const key = new DirectionalLight(0xfff2d8, 1.4)
+        key.position.set(-1.2, 0.8, 0.6)
+        return key
+      })(),
+    ])
+
     const controls = globe.controls()
     controls.autoRotate = !reduceMotion
     controls.autoRotateSpeed = 0.25
@@ -357,6 +458,26 @@ export default function Globe({
       conflictByNeName.get((poly as PolyFeature).properties.name) ?? null,
     [conflictByNeName]
   )
+
+  // Reverse binding for heat-glow clicks (conflict id → NE country name)
+  const neNameByConflict = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const [ne, c] of conflictByNeName) m.set(c.id, ne)
+    return m
+  }, [conflictByNeName])
+
+  // Gold-on-charcoal surface: the night-lights texture (set via
+  // globeImageUrl) lands on this material, whose warm color multiplies city
+  // lights into gold while oceans stay black; bump relief stays subtle.
+  const globeSurface = useMemo(() => {
+    const m = new MeshPhongMaterial()
+    m.color = new Color('#d8b878')
+    m.emissive = new Color('#16130c')
+    m.bumpScale = 12
+    m.shininess = 4
+    m.specular = new Color('#1a160e')
+    return m
+  }, [])
 
   // Marker click priority: markers are small and sit on top of full-coverage
   // country polygons, so a near-miss raycasts through to the polygon and
@@ -505,7 +626,8 @@ export default function Globe({
           ? makeAircraftEl(d as MilitaryAircraft, onSelectAircraft)
           : makeMilitaryEl(d as MilitarySite, onSelectMilitarySite)
       }
-      return makeHotspotEl(d as Hotspot, onSelectHotspot)
+      const h = d as Hotspot
+      return makeHotspotEl(h, onSelectHotspot, h.zone === selectedHotspotZoneRef.current)
     },
     [isDisasterLens, isTrackingLens, onSelectHazard, onSelectAircraft, onSelectMilitarySite, onSelectHotspot]
   )
@@ -542,26 +664,87 @@ export default function Globe({
     return s
   }, [showOutbreaks, outbreaks])
 
+  // Premium country interaction: warm land tint at rest, hovered country
+  // brightens while the rest dim slightly, selected country carries the
+  // strongest fill + border. Severity tint stays subtle — the heat layer
+  // now carries the conflict signal.
+  const anyHover = hoverPoly !== null
   const polygonCapColor = useCallback(
     (poly: object) => {
       const name = (poly as PolyFeature).properties.name
       const isHover = poly === hoverPoly
       const isSelected = selectedCountryName !== null && name === selectedCountryName
-      if (isSelected) return 'rgba(200, 162, 74, 0.28)'
-      if (isHover) return 'rgba(232, 229, 220, 0.14)'
+      if (isSelected) return 'rgba(200, 162, 74, 0.30)'
+      if (isHover) return 'rgba(227, 194, 122, 0.18)'
       if (isContaminationLens) {
-        // Choropleth: tint countries named in an active outbreak
-        return outbreakCountries.has(name.toLowerCase()) ? 'rgba(176, 122, 176, 0.30)' : 'rgba(0,0,0,0)'
+        return outbreakCountries.has(name.toLowerCase()) ? 'rgba(176, 122, 176, 0.30)' : 'rgba(200,162,74,0.04)'
       }
       const conflict = isConflictLens ? resolveConflict(poly) : null
       if (conflict && conflict.threatLevel >= 2) {
-        const alpha = 0.10 + conflict.threatLevel * 0.05
+        const alpha = (anyHover ? 0.05 : 0.07) + conflict.threatLevel * 0.025
         return `${sevColor(conflict.threatLevel)}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`
       }
-      return 'rgba(0,0,0,0)'
+      // Faint warm land tint separates land from the black oceans
+      return anyHover ? 'rgba(200,162,74,0.025)' : 'rgba(200,162,74,0.045)'
     },
-    [hoverPoly, selectedCountryName, isConflictLens, isContaminationLens, outbreakCountries, resolveConflict]
+    [hoverPoly, anyHover, selectedCountryName, isConflictLens, isContaminationLens, outbreakCountries, resolveConflict]
   )
+
+  const polygonStrokeColor = useCallback(
+    (poly: object) => {
+      const name = (poly as PolyFeature).properties.name
+      if (selectedCountryName !== null && name === selectedCountryName) return 'rgba(227, 194, 122, 0.95)'
+      if (poly === hoverPoly) return 'rgba(227, 194, 122, 0.85)'
+      // Neighbors recede slightly while something is hovered
+      return anyHover ? 'rgba(200, 162, 74, 0.30)' : 'rgba(200, 162, 74, 0.48)'
+    },
+    [hoverPoly, anyHover, selectedCountryName]
+  )
+
+  // ── Conflict heat layer: soft severity-colored glows fused to the surface ──
+  const showHeat = isConflictLens && toggles['heat'] !== false
+  const heatData = useMemo(
+    () => (showHeat ? conflicts.filter(c => c.threatLevel >= 2) : []),
+    [showHeat, conflicts]
+  )
+
+  const makeHeatSprite = useCallback((d: object) => {
+    const c = d as ConflictPoint
+    const sprite = new Sprite(new SpriteMaterial({
+      map: getGlowTexture(),
+      color: new Color(sevColor(c.threatLevel)),
+      transparent: true,
+      opacity: 0.16 + c.threatLevel * 0.05,
+      blending: AdditiveBlending,
+      depthWrite: false,
+    }))
+    const scale = 7 + c.threatLevel * 2.5
+    sprite.scale.set(scale, scale, 1)
+    return sprite as unknown as Object3D
+  }, [])
+
+  const updateHeatSprite = useCallback((obj: object, d: object) => {
+    const globe = globeRef.current
+    if (!globe) return
+    const c = d as ConflictPoint
+    const pos = globe.getCoords(c.lat, c.lng, 0.018)
+    ;(obj as Object3D).position.set(pos.x, pos.y, pos.z)
+  }, [])
+
+  // Pulse animation on the selected hotspot marker only. Two paths: markers
+  // created after a selection read the ref at creation time; markers already
+  // mounted get the class toggled by the effect below.
+  const selectedHotspotZoneRef = useRef<string | null>(null)
+  selectedHotspotZoneRef.current = selectedHotspotZone
+
+  useEffect(() => {
+    for (const el of Array.from(document.querySelectorAll('[data-hotspot-zone]'))) {
+      el.querySelector('.hotspot-dot')?.classList.toggle(
+        'selected',
+        el.getAttribute('data-hotspot-zone') === selectedHotspotZone
+      )
+    }
+  }, [selectedHotspotZone, htmlData])
 
   return (
     <GlobeGL
@@ -569,17 +752,20 @@ export default function Globe({
       width={dimensions.width}
       height={dimensions.height}
       backgroundColor="#100f0d"
-      globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+      /* Gold-on-charcoal identity: night-lights texture × warm gold material
+         (set post-mount) — black oceans, gold city lights, bump relief */
+      globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
       bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
+      globeMaterial={globeSurface}
       showAtmosphere
-      atmosphereColor="#5a6b7a"
-      atmosphereAltitude={0.12}
-      /* Country polygons — every country clickable */
+      atmosphereColor="#c8a24a"
+      atmosphereAltitude={0.16}
+      /* Country polygons — every country clickable, thin gold borders */
       polygonsData={COUNTRY_FEATURES}
       polygonGeoJsonGeometry={(d: object) => (d as PolyFeature).geometry as never}
       polygonCapColor={polygonCapColor}
       polygonSideColor={() => 'rgba(0,0,0,0)'}
-      polygonStrokeColor={() => 'rgba(232, 229, 220, 0.30)'}
+      polygonStrokeColor={polygonStrokeColor}
       polygonAltitude={0.004}
       polygonsTransitionDuration={0}
       onPolygonHover={(poly: object | null) => setHoverPoly(poly)}
@@ -589,10 +775,45 @@ export default function Globe({
       pathPoints={(p: object) => p as never}
       pathPointLat={(c: [number, number]) => c[0]}
       pathPointLng={(c: [number, number]) => c[1]}
-      pathColor={() => 'rgba(232, 229, 220, 0.16)'}
+      pathColor={() => 'rgba(200, 162, 74, 0.20)'}
       pathStroke={0.4}
       pathPointAlt={() => 0.0045}
       pathTransitionDuration={0}
+      /* Intelligence-network arcs — global-view ambience only */
+      arcsData={farZoom ? NETWORK_ARCS : []}
+      arcStartLat="startLat"
+      arcStartLng="startLng"
+      arcEndLat="endLat"
+      arcEndLng="endLng"
+      arcColor={() => ['rgba(200,162,74,0)', 'rgba(200,162,74,0.32)', 'rgba(200,162,74,0)']}
+      arcStroke={0.22}
+      arcAltitudeAutoScale={0.35}
+      arcDashLength={0.5}
+      arcDashGap={1.4}
+      arcDashInitialGap={(d: object) => ((d as NetworkArc).t % 7) * 0.35}
+      arcDashAnimateTime={reduceMotion ? 0 : 11000}
+      arcsTransitionDuration={600}
+      /* Ambient particle field — sparse, barely-there gold */
+      particlesData={[PARTICLE_FIELD]}
+      particlesList={(d: object) => d as never}
+      particleLat="lat"
+      particleLng="lng"
+      particleAltitude="alt"
+      particlesColor={() => 'rgba(200,162,74,0.4)'}
+      particlesSize={1.1}
+      particlesSizeAttenuation
+      /* Conflict heat — soft severity glows fused to the surface */
+      customLayerData={heatData}
+      customThreeObject={makeHeatSprite}
+      customThreeObjectUpdate={updateHeatSprite}
+      customLayerLabel={(d: object) => {
+        const c = d as ConflictPoint
+        return tooltip(c.name, `S${c.threatLevel} conflict heat · click for assessment`)
+      }}
+      onCustomLayerClick={(d: object) => {
+        const c = d as ConflictPoint
+        onSelectCountry({ name: neNameByConflict.get(c.id) ?? c.name, conflict: c })
+      }}
       /* Point markers — events (severity channel) or quakes (hazard channel) */
       pointsData={pointMarkers}
       pointLat="lat"

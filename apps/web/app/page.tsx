@@ -353,6 +353,7 @@ export default function GlobePage() {
             aircraft={filteredAircraft}
             airbases={bulkAirbases}
             siteFilter={siteFilter}
+            selectedHotspotZone={selection?.type === 'hotspot' ? selection.hotspot.zone : null}
             conflictByNeName={conflictByNeName}
             selectedCountryName={selection?.type === 'country' ? selection.name : null}
             onSelectCountry={c => setSelection({ type: 'country', name: c.name, conflict: c.conflict })}
