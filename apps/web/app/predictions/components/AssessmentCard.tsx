@@ -29,7 +29,7 @@ export default function AssessmentCard({
           {region}
         </h3>
         <span className="tabnum text-[10px] uppercase shrink-0" style={{ color: 'var(--text-2)' }}>
-          conf {confidence}
+          conf {confidence} · {usedEventIds.length} events
         </span>
         <span className="tabnum text-[10px] ml-auto shrink-0" style={{ color: 'var(--text-3)' }}>
           {fmtUTC(createdAt)}

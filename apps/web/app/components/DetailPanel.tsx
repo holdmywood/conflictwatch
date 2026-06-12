@@ -5,6 +5,8 @@ import Panel from './Panel'
 import SevMark from './SevMark'
 import ConflictPanel from './ConflictPanel'
 import { fmtPct, fmtUTC, forecastColor } from '../lib/tokens'
+import { verifyItem, verifyOfficialFeed, assessQuality, countIndependentSources } from '../lib/verification'
+import VerificationBadge from './VerificationBadge'
 import type { Signal } from './SignalCard'
 import type { ConflictPoint, EventBlip, HazardPoint, Outbreak, MilitaryAircraft } from './Globe'
 import type { Hotspot } from '../lib/hotspots'
@@ -173,6 +175,9 @@ function CountryTabs({
                   Drivers: {signal.drivers.join('; ')}
                 </p>
               )}
+              <p className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
+                Evidence: {signal.usedEventIds.length} source events · model {signal.modelVersion} — probabilistic, not a certain outcome
+              </p>
             </div>
           ) : (
             <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>
@@ -180,6 +185,13 @@ function CountryTabs({
             </p>
           )}
         </div>
+        {signal?.rationale && (
+          <WhyMatters
+            text={signal.rationale}
+            basis={`AI escalation assessment over ${signal.usedEventIds.length} corroborated events`}
+          />
+        )}
+        {conflict && <QualityBlock conflictId={conflict.id} hasSignal={signal !== null} />}
       </div>
     )
   }
@@ -214,6 +226,49 @@ function CountryTabs({
           {conflict ? ' Event-level sources are listed under Events.' : ''}
         </p>
       )}
+    </div>
+  )
+}
+
+/** "Why this matters" — source-backed significance, never invented. */
+function WhyMatters({ text, basis }: { text: string; basis: string }) {
+  return (
+    <details open className="pt-1.5 border-t" style={{ borderColor: 'var(--border)' }}>
+      <summary className="label cursor-pointer select-none">Why this matters</summary>
+      <p className="text-[11px] leading-relaxed mt-1" style={{ color: 'var(--text-2)' }}>{text}</p>
+      <p className="text-[9.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{basis}</p>
+    </details>
+  )
+}
+
+/** Country intelligence-quality block — computed from the event record. */
+function QualityBlock({ conflictId, hasSignal }: { conflictId: string; hasSignal: boolean }) {
+  const [detail, setDetail] = useState<{ events: Array<{ publishedAt: string; sources: Array<{ name: string }> }> } | null>(null)
+
+  useEffect(() => {
+    setDetail(null)
+    fetch(`/api/conflict/${conflictId}`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(setDetail)
+      .catch(() => {})
+  }, [conflictId])
+
+  if (!detail) return null
+  const allSources = detail.events.flatMap(e => e.sources.map(x => x.name))
+  const q = assessQuality({
+    eventCount: detail.events.length,
+    independentSources: countIndependentSources(allSources),
+    lastEventAt: detail.events[0]?.publishedAt ?? null,
+    hasSignal,
+  })
+  return (
+    <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+      <div className="label mb-1">Intelligence quality</div>
+      <div className="flex items-baseline gap-2">
+        <span className="tabnum text-[16px] font-semibold" style={{ color: 'var(--text)' }}>{q.score}%</span>
+        <span className="text-[10px]" style={{ color: 'var(--text-2)' }}>{q.category}</span>
+      </div>
+      <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-3)' }}>Based on: {q.reasons.join(' · ')}</p>
     </div>
   )
 }
@@ -268,9 +323,18 @@ function EventTabs({ tab, event }: { tab: string; event: EventBlip }) {
           <span className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>{fmtUTC(event.publishedAt)}</span>
         </div>
         <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{event.title}</p>
+        <VerificationBadge
+          v={verifyItem({ sourceNames: event.sources.map(x => x.name), sourceTier: event.sourceTier, updatedAt: event.publishedAt })}
+        />
         <p className="tabnum text-[10px]" style={{ color: 'var(--text-3)' }}>
           {event.lat.toFixed(2)}, {event.lng.toFixed(2)}
         </p>
+        {event.stabilityImpact && event.stabilityImpact !== 'none' && (
+          <WhyMatters
+            text={event.stabilityImpact}
+            basis={`AI assessment from the source article (${event.sources.length} source${event.sources.length === 1 ? '' : 's'})`}
+          />
+        )}
       </div>
     )
   }
@@ -292,6 +356,24 @@ function EventTabs({ tab, event }: { tab: string; event: EventBlip }) {
 
 /* ── Hazard ───────────────────────────────────────────────────────────────── */
 
+// Significance from the source's own alert semantics (USGS PAGER levels,
+// GDACS alert colors) — never speculation beyond what the feed encodes.
+function hazardWhy(h: HazardPoint): string | null {
+  if (h.kind === 'earthquake' && h.magnitude !== null) {
+    if (h.alertLevel === 'red')
+      return `M ${h.magnitude.toFixed(1)} with a RED impact alert — the source feed projects significant casualties or damage and likely national/international humanitarian response.`
+    if (h.alertLevel === 'orange')
+      return `M ${h.magnitude.toFixed(1)} with an ORANGE impact alert — the source feed projects regional damage and a likely organized response.`
+    if (h.magnitude >= 6.5)
+      return `M ${h.magnitude.toFixed(1)} — earthquakes at this magnitude can damage infrastructure and displace populations near the epicenter.`
+    return null
+  }
+  if (h.kind === 'tsunami') return 'Active tsunami warning — coastal populations and ports in the affected basin may face evacuation and shipping disruption.'
+  if (h.kind === 'volcano') return 'Volcanic activity alert — ashfall can close airspace and disrupt regional aviation; proximity impacts depend on eruption scale.'
+  if (h.kind === 'alert' && h.alertLevel === 'red') return 'RED multi-hazard alert — the source feed projects major humanitarian impact in the affected area.'
+  return null
+}
+
 const HAZARD_TITLES: Record<HazardPoint['kind'], string> = {
   earthquake: 'Earthquake',
   volcano: 'Volcanic activity',
@@ -304,12 +386,14 @@ function HazardTabs({ tab, hazard }: { tab: string; hazard: HazardPoint }) {
     return (
       <div className="p-2.5 space-y-2">
         <p className="text-[12px] leading-snug" style={{ color: 'var(--text)' }}>{hazard.title}</p>
+        <VerificationBadge v={verifyOfficialFeed(hazard.source, hazard.time)} />
         <dl className="space-y-1">
           {hazard.magnitude !== null && <ProvRow k="Magnitude" v={hazard.magnitude.toFixed(1)} />}
           {hazard.alertLevel && <ProvRow k="Alert level" v={hazard.alertLevel.toUpperCase()} />}
           <ProvRow k="Time" v={fmtUTC(hazard.time)} />
           <ProvRow k="Position" v={`${hazard.lat.toFixed(2)}, ${hazard.lng.toFixed(2)}`} />
         </dl>
+        {hazardWhy(hazard) && <WhyMatters text={hazardWhy(hazard)!} basis={`Derived from ${hazard.source} alert data`} />}
       </div>
     )
   }
@@ -403,6 +487,11 @@ function OutbreakTabs({ tab, outbreak }: { tab: string; outbreak: Outbreak }) {
           <ProvRow k="Countries" v={outbreak.countries.length ? outbreak.countries.join(', ') : 'see report'} />
           <ProvRow k="Reported" v={fmtUTC(outbreak.publishedAt)} />
         </dl>
+        <VerificationBadge v={verifyOfficialFeed('WHO Disease Outbreak News', outbreak.publishedAt)} />
+        <WhyMatters
+          text={`WHO publishes a Disease Outbreak News item only when an event has potential international public-health significance — ${outbreak.disease} activity here may strain health systems and carry cross-border risk${outbreak.countries.length > 1 ? ` across ${outbreak.countries.length} countries` : ''}.`}
+          basis="Derived from WHO DON publication criteria"
+        />
         <p className="text-[10px] pt-1 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
           Confirmed-case counts are in the WHO report, not this feed — opened via Source.
         </p>
@@ -464,6 +553,7 @@ function HotspotTabs({ tab, hotspot, blips }: { tab: string; hotspot: Hotspot; b
           <ProvRow k="Type" v={hotspot.kind.replace('_', ' ')} />
           <ProvRow k="Position" v={`${hotspot.lat.toFixed(2)}, ${hotspot.lng.toFixed(2)}`} />
         </dl>
+        <ZoneWhy zone={hotspot.zone} label={hotspot.label} />
         {hotspot.reviewStatus === 'unreviewed' && (
           <p className="text-[10px] pt-1.5 border-t" style={{ color: 'var(--text-3)', borderColor: 'var(--border)' }}>
             Exposure linkages for this zone await editorial review.
@@ -505,6 +595,34 @@ function HotspotTabs({ tab, hotspot, blips }: { tab: string; hotspot: Hotspot; b
   }
 
   return <MaritimeTab zone={hotspot.zone} />
+}
+
+/** Hotspot significance composed from the curated exposure graph — the
+ *  weights and notes are sourced editorial data, not generated prose. */
+function ZoneWhy({ zone, label }: { zone: string; label: string }) {
+  const [exposures, setExposures] = useState<Array<{
+    instrumentLabel: string; linkType: string; weight: number; notes: string
+  }> | null>(null)
+
+  useEffect(() => {
+    setExposures(null)
+    fetch(`/api/zone/${zone}/exposures`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => setExposures(d.exposures ?? []))
+      .catch(() => setExposures([]))
+  }, [zone])
+
+  if (!exposures || exposures.length === 0) return null
+  const top = exposures.slice(0, 3)
+  const parts = top.map(e =>
+    `${e.instrumentLabel} (${fmtPct(e.weight)} ${e.linkType} weight${e.notes ? ` — ${e.notes}` : ''})`
+  )
+  return (
+    <WhyMatters
+      text={`${label} is linked to ${exposures.length} tracked market exposure${exposures.length === 1 ? '' : 's'}: ${parts.join('; ')}. Disruption here transmits to these instruments first.`}
+      basis={`Curated exposure graph, ${exposures.length} reviewed linkages`}
+    />
+  )
 }
 
 function ZoneExposureList({ zone }: { zone: string }) {

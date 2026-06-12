@@ -1,4 +1,8 @@
+'use client'
+
 import { fmtUTC } from '../../lib/tokens'
+import { verifyItem } from '../../lib/verification'
+import VerificationBadge from '../../components/VerificationBadge'
 
 interface Source {
   id: string
@@ -8,6 +12,7 @@ interface Source {
 
 interface EventCardProps {
   title: string
+  sourceTier?: string
   actor1?: string | null
   actor2?: string | null
   eventType: string
@@ -24,6 +29,7 @@ interface EventCardProps {
  */
 export default function EventCard({
   title,
+  sourceTier,
   actor1,
   actor2,
   eventType,
@@ -42,8 +48,11 @@ export default function EventCard({
       <td className="tabnum text-[10px] uppercase pr-2 py-2 whitespace-nowrap w-px" style={{ color: 'var(--text-2)' }}>
         {eventType}
       </td>
-      <td className="tabnum text-[10px] uppercase pr-3 py-2 whitespace-nowrap w-px" style={{ color: 'var(--text-3)' }}>
-        {confidence}
+      <td className="pr-3 py-2 whitespace-nowrap w-px">
+        <VerificationBadge
+          v={verifyItem({ sourceNames: sources.map(s => s.name), sourceTier, updatedAt: publishedAt })}
+          showConfidence={false}
+        />
       </td>
       <td className="pr-3 py-2 min-w-0">
         {actors && (

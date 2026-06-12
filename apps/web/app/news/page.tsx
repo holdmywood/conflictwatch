@@ -5,6 +5,8 @@ import TerminalShell from '../components/TerminalShell'
 import Panel from '../components/Panel'
 import SevMark from '../components/SevMark'
 import { fmtUTC } from '../lib/tokens'
+import { verifyItem } from '../lib/verification'
+import VerificationBadge from '../components/VerificationBadge'
 
 interface NewsEvent {
   id: string
@@ -176,7 +178,7 @@ function NewsRow({ e }: { e: NewsEvent }) {
       <div className="flex items-baseline gap-2 mb-0.5">
         <SevMark level={e.severity} />
         {e.category && <span className="tabnum text-[10px] uppercase" style={{ color: 'var(--text-2)' }}>{e.category}</span>}
-        {e.sourceTier && <span className="tabnum text-[10px] uppercase" style={{ color: 'var(--text-3)' }}>{e.sourceTier}</span>}
+        <VerificationBadge v={verifyItem({ sourceNames: e.sources.map(s => s.name), sourceTier: e.sourceTier, updatedAt: e.publishedAt })} />
         <span className="tabnum text-[10px] ml-auto shrink-0" style={{ color: 'var(--text-3)' }}>{fmtUTC(e.publishedAt)}</span>
       </div>
       {/* AI-generated factual title — never a templated actor string */}

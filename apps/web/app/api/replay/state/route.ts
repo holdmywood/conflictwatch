@@ -51,6 +51,7 @@ export async function GET(req: Request) {
       take: 100,
       select: {
         id: true, title: true, lat: true, lng: true, severity: true, publishedAt: true,
+        stabilityImpact: true, sourceTier: true,
         sources: { select: { id: true, name: true, url: true } },
       },
     }),

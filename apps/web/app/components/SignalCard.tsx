@@ -19,6 +19,7 @@ export interface Signal {
   rationale: string
   computedAt: string
   usedEventIds: string[]
+  triggeringFeatures?: { sourceBreadth?: number } | null
 }
 
 export interface SignalConflict {
@@ -297,6 +298,18 @@ export default function SignalCard({ signal, conflict }: { signal: Signal; confl
           <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>No comparable historical episodes on file.</p>
         )}
       </Row>
+
+      {/* ── Data quality (deterministic, inputs shown) ───────── */}
+      <div className="px-3 py-1.5 border-t" style={{ borderColor: 'var(--border)' }}>
+        <span className="label">Data quality</span>
+        <span className="tabnum text-[10px] ml-2" style={{ color: 'var(--text-2)' }}>
+          {signal.usedEventIds.length} source events
+          {typeof signal.triggeringFeatures?.sourceBreadth === 'number' && signal.triggeringFeatures.sourceBreadth > 0
+            ? ` · ${signal.triggeringFeatures.sourceBreadth} independent sources`
+            : ' · source breadth unrecorded'}
+          {' · '}probabilistic forecast — not a certain outcome
+        </span>
+      </div>
 
       {/* ── Provenance ───────────────────────────────────────── */}
       <div className="border-t" style={{ borderColor: 'var(--border)' }}>

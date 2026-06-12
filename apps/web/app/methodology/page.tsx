@@ -203,6 +203,43 @@ export default function MethodologyPage() {
               </div>
             </dl>
           </Panel>
+
+          <Panel title="Verification & confidence">
+            <div className="max-w-[72ch] space-y-2 text-[12px] leading-relaxed" style={{ color: 'var(--text)' }}>
+              <p>
+                Every intelligence item carries a deterministic verification level and a 0–100
+                confidence score — no model output, no hidden weighting; every badge can show
+                the inputs that produced it.
+              </p>
+              <dl className="space-y-1.5 text-[11.5px]">
+                <div>
+                  <dt className="label mb-0.5">Verification levels</dt>
+                  <dd style={{ color: 'var(--text-2)' }}>
+                    Verified = ≥3 independent sources (wire syndication collapsed) including a
+                    tier-1 source · Multiple sources = ≥2 independent · Unconfirmed = 1 source ·
+                    Rumor = no trusted source (normally excluded by the ingest trust gate).
+                  </dd>
+                </div>
+                <div>
+                  <dt className="label mb-0.5">Item confidence (0–100)</dt>
+                  <dd style={{ color: 'var(--text-2)' }}>
+                    Independent sources (≤40, 12 pts each) + best source tier (tier-1 25 /
+                    tier-2 18 / specialist 14 / unrecorded 6) + recency (20 at ≤6 h, decaying
+                    to 4 beyond 7 d) + verification level (15/10/4/0). Bands: 90+ very high,
+                    75–89 high, 60–74 moderate, 40–59 low, &lt;40 very low.
+                  </dd>
+                </div>
+                <div>
+                  <dt className="label mb-0.5">Aggregate intelligence quality</dt>
+                  <dd style={{ color: 'var(--text-2)' }}>
+                    For countries and predictions: event coverage (≤35) + independent sources
+                    (≤30) + recency (≤20) + active signal (15). Official authoritative feeds
+                    (USGS, WHO DON, GDACS) are Verified by provenance with the feed named.
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </Panel>
         </div>
       </div>
     </TerminalShell>

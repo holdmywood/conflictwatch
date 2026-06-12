@@ -11,7 +11,7 @@ export async function GET() {
       id: true, targetId: true, escalationRisk: true, pEscalation: true,
       ciLow: true, ciHigh: true, horizonDays: true, modelVersion: true,
       trajectory: true, drivers: true, actorsOfConcern: true, rationale: true,
-      computedAt: true, usedEventIds: true,
+      computedAt: true, usedEventIds: true, triggeringFeatures: true,
     },
   })
 

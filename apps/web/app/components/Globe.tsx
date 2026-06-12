@@ -57,6 +57,9 @@ export interface EventBlip {
   lng: number
   severity: number
   publishedAt: string
+  /** AI stability-impact line from classification — the 'why this matters'. */
+  stabilityImpact?: string
+  sourceTier?: string
   sources: Array<{ id: string; name: string; url: string }>
 }
 

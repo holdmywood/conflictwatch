@@ -203,6 +203,8 @@ export default function GlobePage() {
             .map(e => ({
               id: e.id, title: e.title, lat: e.lat, lng: e.lng,
               severity: e.severity, publishedAt: e.publishedAt, sources: e.sources,
+              stabilityImpact: (e as { stabilityImpact?: string }).stabilityImpact,
+              sourceTier: (e as { sourceTier?: string }).sourceTier,
             }))
         )
       )

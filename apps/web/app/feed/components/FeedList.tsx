@@ -11,6 +11,7 @@ interface FeedEvent {
   actor2?: string | null
   eventType: string
   confidence: string
+  sourceTier?: string
   publishedAt: string
   region: string
   sources: { id: string; name: string; url: string }[]
@@ -144,6 +145,7 @@ export default function FeedList({ filters, onClear }: FeedListProps) {
               actor2={event.actor2}
               eventType={event.eventType}
               confidence={event.confidence}
+            sourceTier={event.sourceTier}
               publishedAt={event.publishedAt}
               region={event.region}
               sources={event.sources}
