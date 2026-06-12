@@ -11,14 +11,22 @@ const mockEventFindUnique = vi.fn().mockResolvedValue(null)
 const mockEventUpdate = vi.fn().mockResolvedValue({})
 const mockSourceFindMany = vi.fn().mockResolvedValue([])
 
-vi.mock('@conflictwatch/db', () => ({
-  prisma: {
-    conflict: { upsert: mockUpsert, findUnique: mockFindUnique, update: mockUpdate },
-    event: { upsert: mockUpsert, findMany: mockFindMany, findUnique: mockEventFindUnique, update: mockEventUpdate },
-    eventSource: { upsert: mockCreate, findMany: mockSourceFindMany },
-    heartbeat: { upsert: mockUpsert },
-  },
-}))
+vi.mock('@conflictwatch/db', async () => {
+  // The threat aggregation is pure shared logic — use the real implementation
+  // so these tests pin production behavior, not a mock's.
+  const threatModel = await vi.importActual<typeof import('../../../../packages/db/threat-model.ts')>(
+    '../../../../packages/db/threat-model.ts'
+  )
+  return {
+    ...threatModel,
+    prisma: {
+      conflict: { upsert: mockUpsert, findUnique: mockFindUnique, update: mockUpdate },
+      event: { upsert: mockUpsert, findMany: mockFindMany, findUnique: mockEventFindUnique, update: mockEventUpdate },
+      eventSource: { upsert: mockCreate, findMany: mockSourceFindMany },
+      heartbeat: { upsert: mockUpsert },
+    },
+  }
+})
 
 const { persistEvent, updateHeartbeat, accrueSourceToCluster, recomputeConflictThreat } = await import('./persist.js')
 

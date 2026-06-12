@@ -1,24 +1,14 @@
-import { prisma } from '@conflictwatch/db'
+import { prisma, threatFromSeverities, THREAT_WINDOW_MS } from '@conflictwatch/db'
 import { toEventType, scoreConfidence } from './score.js'
 import { buildTitle } from './normalize.js'
 import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
 import type { ClassifyResult } from '../ai/enricher.js'
 
-// Trailing window for threat aggregation (7 days).
-const THREAT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-
-// Minimum corroborated (medium/high confidence, locationConfidence != low) events
-// at each cumulative level to reach that threat score.
-//   5/5 = 15+ corroborated high-severity events (sustained armed conflict)
-//   4/5 = 5+  repeated serious incidents
-//   3/5 = 3+  corroborated pattern
-//   2/5 = 2+  isolated corroborated event
-const MIN_EVENTS: Partial<Record<number, number>> = { 5: 15, 4: 5, 3: 3, 2: 2 }
-
 // Cumulative threat aggregation over AI severity scores (1–5).
-// Uses event.severity (from AI classify) directly — no CAMEO mapping.
-// Only medium/high confidence events with non-low locationConfidence count.
+// The aggregation rule lives in @conflictwatch/db (threatFromSeverities) so
+// the web replay API recomputes history with identical logic. Only
+// medium/high confidence events with non-low locationConfidence count.
 async function computeConflictThreat(cId: string): Promise<number> {
   const cutoff = new Date(Date.now() - THREAT_WINDOW_MS)
   const events = await prisma.event.findMany({
@@ -31,28 +21,7 @@ async function computeConflictThreat(cId: string): Promise<number> {
     },
     select: { severity: true },
   })
-
-  const counts = new Map<number, number>()
-  for (const e of events) {
-    const s = e.severity
-    counts.set(s, (counts.get(s) ?? 0) + 1)
-  }
-
-  // Build cumulative counts: an event at severity S contributes to all levels ≤ S
-  const cumulative = new Map<number, number>()
-  for (const [score, count] of counts) {
-    for (let lvl = 1; lvl <= score; lvl++) {
-      cumulative.set(lvl, (cumulative.get(lvl) ?? 0) + count)
-    }
-  }
-
-  for (let s = 5; s >= 1; s--) {
-    const count = cumulative.get(s) ?? 0
-    if (count === 0) continue
-    if (count < (MIN_EVENTS[s] ?? 1)) continue
-    return s
-  }
-  return 1
+  return threatFromSeverities(events.map(e => e.severity))
 }
 
 function conflictId(countryCode: string): string {

@@ -23,8 +23,20 @@ export interface Hazard {
 const USGS_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson'
 const GDACS_URL = 'https://www.gdacs.org/gdacsapi/api/events/geteventlist/MAP'
 
-async function fetchUsgs(): Promise<Hazard[]> {
-  const res = await fetch(USGS_URL, { signal: AbortSignal.timeout(10_000), next: { revalidate: 300 } })
+// USGS FDSN event service supports true historical queries — replay quakes
+// for the 24h window ending at asOf.
+function usgsHistoricalUrl(asOf: Date): string {
+  const start = new Date(asOf.getTime() - 24 * 3600 * 1000)
+  return (
+    'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson' +
+    `&starttime=${start.toISOString()}&endtime=${asOf.toISOString()}` +
+    '&minmagnitude=2.5&orderby=time&limit=200'
+  )
+}
+
+async function fetchUsgs(asOf?: Date): Promise<Hazard[]> {
+  const url = asOf ? usgsHistoricalUrl(asOf) : USGS_URL
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000), next: { revalidate: asOf ? 3600 : 300 } })
   if (!res.ok) throw new Error(`USGS ${res.status}`)
   const data = (await res.json()) as {
     features: Array<{
@@ -98,8 +110,20 @@ async function fetchGdacs(): Promise<Hazard[]> {
   return out
 }
 
-export async function GET() {
-  const [usgs, gdacs] = await Promise.allSettled([fetchUsgs(), fetchGdacs()])
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const asOfParam = url.searchParams.get('asOf')
+  const asOf = asOfParam ? new Date(asOfParam) : null
+  if (asOfParam && (asOf === null || isNaN(asOf.getTime()) || asOf > new Date())) {
+    return NextResponse.json({ error: 'Invalid asOf timestamp.' }, { status: 400 })
+  }
+
+  // Historical replay: USGS supports true time-range queries; GDACS does not
+  // expose a public historical API, so its alerts are honestly absent.
+  const [usgs, gdacs] = await Promise.allSettled([
+    fetchUsgs(asOf ?? undefined),
+    asOf ? Promise.resolve<Hazard[]>([]) : fetchGdacs(),
+  ])
 
   const hazards: Hazard[] = [
     ...(usgs.status === 'fulfilled' ? usgs.value : []),
@@ -111,10 +135,10 @@ export async function GET() {
       hazards,
       sources: {
         usgs: usgs.status === 'fulfilled' ? 'ok' : 'unavailable',
-        gdacs: gdacs.status === 'fulfilled' ? 'ok' : 'unavailable',
+        gdacs: asOf ? 'no historical archive' : gdacs.status === 'fulfilled' ? 'ok' : 'unavailable',
       },
-      asOf: new Date().toISOString(),
+      asOf: (asOf ?? new Date()).toISOString(),
     },
-    { headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' } }
+    { headers: { 'Cache-Control': `public, s-maxage=${asOf ? 3600 : 300}, stale-while-revalidate=600` } }
   )
 }

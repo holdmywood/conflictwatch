@@ -9,6 +9,8 @@ import EventTape from './components/EventTape'
 import DetailPanel, { type Selection } from './components/DetailPanel'
 import LensSwitcher from './components/globe/LensSwitcher'
 import Legend from './components/globe/Legend'
+import TimelineBar, { PRESET_MS, type TimelineMarker, type TimelinePreset } from './components/globe/TimelineBar'
+import { fmtUTC } from './lib/tokens'
 import { getLens, defaultToggles, type LensId } from './lib/lenses'
 import { bindConflictsToCountries } from './lib/countries'
 import { passesDisplayGate, AIRCRAFT_ROLES, type AircraftRole } from './lib/aircraft-classify'
@@ -103,6 +105,77 @@ export default function GlobePage() {
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [dims, setDims] = useState({ width: 800, height: 600 })
+
+  // ── Timeline replay ───────────────────────────────────────────────────────
+  const [replay, setReplay] = useState({
+    active: false,
+    preset: '30d' as TimelinePreset,
+    from: 0,
+    to: 0,
+    asOf: 0,
+    playing: false,
+    speed: 1 as 1 | 2 | 4,
+  })
+  const [replayMarkers, setReplayMarkers] = useState<TimelineMarker[]>([])
+  const [replaySnap, setReplaySnap] = useState<{
+    asOf: string
+    conflicts: ConflictRow[]
+    events: EventBlip[]
+    signals: Signal[]
+  } | null>(null)
+  const [replayLoading, setReplayLoading] = useState(false)
+  const [replayHazards, setReplayHazards] = useState<HazardPoint[]>([])
+
+  const activateReplay = (preset: TimelinePreset = '30d') => {
+    const to = Date.now()
+    const from = to - PRESET_MS[preset === 'custom' ? '30d' : preset]
+    setReplay({ active: true, preset, from, to, asOf: from, playing: false, speed: 1 })
+  }
+
+  // Significant-event markers for the active range
+  useEffect(() => {
+    if (!replay.active || replay.from === 0) return
+    fetch(`/api/replay/markers?from=${new Date(replay.from).toISOString()}&to=${new Date(replay.to).toISOString()}`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { markers: TimelineMarker[] }) => setReplayMarkers(d.markers))
+      .catch(() => setReplayMarkers([]))
+  }, [replay.active, replay.from, replay.to])
+
+  // Snapshot fetch, debounced while scrubbing; asOf snapped to a 5-minute
+  // grid so historical responses CDN-cache.
+  useEffect(() => {
+    if (!replay.active || replay.asOf === 0) return
+    const snapped = new Date(Math.floor(replay.asOf / 300_000) * 300_000).toISOString()
+    setReplayLoading(true)
+    const t = setTimeout(() => {
+      fetch(`/api/replay/state?asOf=${snapped}`)
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then(setReplaySnap)
+        .catch(() => {})
+        .finally(() => setReplayLoading(false))
+      if (lensId === 'disasters') {
+        fetch(`/api/disasters?asOf=${snapped}`)
+          .then(r => (r.ok ? r.json() : Promise.reject()))
+          .then((d: { hazards: HazardPoint[] }) => setReplayHazards(d.hazards))
+          .catch(() => setReplayHazards([]))
+      }
+    }, 250)
+    return () => clearTimeout(t)
+  }, [replay.active, replay.asOf, lensId])
+
+  // Playback: advance asOf until the end of the range
+  useEffect(() => {
+    if (!replay.active || !replay.playing) return
+    const id = setInterval(() => {
+      setReplay(r => {
+        const step = ((r.to - r.from) / 240) * r.speed
+        const next = r.asOf + step
+        return next >= r.to ? { ...r, asOf: r.to, playing: false } : { ...r, asOf: next }
+      })
+    }, 300)
+    return () => clearInterval(id)
+  }, [replay.active, replay.playing, replay.speed])
+
 
   useEffect(() => {
     fetch('/api/conflicts')
@@ -208,6 +281,23 @@ export default function GlobePage() {
       (!q || s.operator.toLowerCase().includes(q) || s.country.toLowerCase().includes(q))
   }, [baseTypeFilter, operatorFilter])
 
+  // ── Effective data: historical snapshot during replay, live otherwise ─────
+  const replaying = replay.active && replaySnap !== null
+  const snapSignals = useMemo(
+    () => (replaySnap ? new Map(replaySnap.signals.map(s => [s.targetId, s])) : new Map<string, Signal>()),
+    [replaySnap]
+  )
+  const effConflicts = replaying ? replaySnap.conflicts : conflicts
+  const effBlips = replaying ? replaySnap.events : blips
+  const effSignals = replaying ? snapSignals : signals
+  const effHazards = replaying ? replayHazards : hazards
+  const effOutbreaks = useMemo(
+    () => (replaying && replaySnap ? outbreaks.filter(o => o.publishedAt <= replaySnap.asOf) : outbreaks),
+    [replaying, outbreaks, replaySnap]
+  )
+  // Live tracking feeds have no historical archive — honest empty state
+  const effAircraft = replaying ? [] : filteredAircraft
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -221,31 +311,31 @@ export default function GlobePage() {
 
   const watchlist: WatchlistEntry[] = useMemo(
     () =>
-      conflicts.map(c => ({
+      effConflicts.map(c => ({
         id: c.id,
         name: c.name,
         region: c.region,
         threatLevel: c.threatLevel,
-        pEscalation: signals.get(c.id)?.pEscalation ?? null,
+        pEscalation: effSignals.get(c.id)?.pEscalation ?? null,
       })),
-    [conflicts, signals]
+    [effConflicts, effSignals]
   )
 
   const situationLines = useMemo(
-    () => new Map(conflicts.map(c => [c.id, c.currentSituationLine])),
-    [conflicts]
+    () => new Map(effConflicts.map(c => [c.id, c.currentSituationLine])),
+    [effConflicts]
   )
 
   // Deterministic country binding: point-in-polygon on conflict coordinates,
   // so polygon clicks, watchlist selection, and the selected-country fill all
   // agree on the same Natural Earth name.
   const { neNameByConflictId, conflictByNeName } = useMemo(
-    () => bindConflictsToCountries(conflicts),
-    [conflicts]
+    () => bindConflictsToCountries(effConflicts),
+    [effConflicts]
   )
 
   const selectConflictById = (id: string) => {
-    const c = conflicts.find(x => x.id === id)
+    const c = effConflicts.find(x => x.id === id)
     if (c) setSelection({ type: 'country', name: neNameByConflictId.get(c.id) ?? c.name, conflict: c })
   }
 
@@ -346,11 +436,11 @@ export default function GlobePage() {
           <Globe
             lens={lensId}
             toggles={toggles}
-            conflicts={conflicts}
-            events={blips}
-            hazards={hazards}
-            outbreaks={outbreaks}
-            aircraft={filteredAircraft}
+            conflicts={effConflicts}
+            events={effBlips}
+            hazards={effHazards}
+            outbreaks={effOutbreaks}
+            aircraft={effAircraft}
             airbases={bulkAirbases}
             siteFilter={siteFilter}
             selectedHotspotZone={selection?.type === 'hotspot' ? selection.hotspot.zone : null}
@@ -367,6 +457,30 @@ export default function GlobePage() {
             containerHeight={dims.height}
           />
           <Legend lens={lens} />
+          {replay.active && (
+            <div
+              className="absolute top-2 right-2 z-10 px-2 py-1 border rounded-[2px]"
+              style={{ background: 'rgba(22, 21, 17, 0.94)', borderColor: 'var(--stale)' }}
+              role="status"
+            >
+              <span className="label" style={{ color: 'var(--stale)' }}>replay</span>
+              <span className="tabnum text-[10px] ml-1.5" style={{ color: 'var(--text-2)' }}>
+                {fmtUTC(new Date(replay.asOf))}
+              </span>
+            </div>
+          )}
+          {replay.active && lensId === 'tracking' && (
+            <div className="absolute inset-x-0 top-0 z-10 flex justify-center pointer-events-none" role="status">
+              <div
+                className="mt-3 px-3 py-2 border rounded-[2px] max-w-md text-center"
+                style={{ background: 'rgba(22, 21, 17, 0.94)', borderColor: 'var(--border-strong)' }}
+              >
+                <p className="text-[11px]" style={{ color: 'var(--text-2)' }}>
+                  Live tracking feeds (ADS-B/AIS) have no historical archive — nothing is shown in replay.
+                </p>
+              </div>
+            </div>
+          )}
           {lensId === 'tracking' && aircraftState === 'ok' && toggles['aircraft'] !== false && filteredAircraft.length === 0 && (
             <div className="absolute inset-x-0 top-0 z-10 flex justify-center pointer-events-none" role="status">
               <div
@@ -405,6 +519,40 @@ export default function GlobePage() {
             </div>
           )}
         </div>
+        <TimelineBar
+          active={replay.active}
+          preset={replay.preset}
+          from={replay.from}
+          to={replay.to}
+          asOf={replay.asOf}
+          playing={replay.playing}
+          speed={replay.speed}
+          markers={replayMarkers}
+          loading={replayLoading}
+          onActivate={() => activateReplay('30d')}
+          onClose={() => { setReplay(r => ({ ...r, active: false, playing: false })); setReplaySnap(null) }}
+          onPreset={p => {
+            if (p === 'custom') { setReplay(r => ({ ...r, preset: p })); return }
+            const to = Date.now()
+            const from = to - PRESET_MS[p]
+            setReplay(r => ({ ...r, preset: p, from, to, asOf: Math.min(Math.max(r.asOf, from), to) }))
+          }}
+          onCustomRange={(fromIso, toIso) => {
+            const from = new Date(fromIso).getTime()
+            const to = Math.min(new Date(toIso).getTime(), Date.now())
+            if (Number.isFinite(from) && Number.isFinite(to) && from < to) {
+              setReplay(r => ({ ...r, from, to, asOf: Math.min(Math.max(r.asOf, from), to) }))
+            }
+          }}
+          onScrub={asOf => setReplay(r => ({ ...r, asOf, playing: false }))}
+          onPlayPause={() => setReplay(r => ({ ...r, playing: !r.playing, asOf: r.asOf >= r.to ? r.from : r.asOf }))}
+          onSpeed={s => setReplay(r => ({ ...r, speed: s }))}
+          onStep={dir => setReplay(r => ({
+            ...r,
+            playing: false,
+            asOf: Math.min(r.to, Math.max(r.from, r.asOf + dir * (r.to - r.from) / 48)),
+          }))}
+        />
       </div>
     </Panel>
   )
@@ -431,7 +579,7 @@ export default function GlobePage() {
           </Panel>
         </div>
         <div className="min-h-0 overflow-hidden">
-          <DetailPanel selection={selection} signals={signals} situationLines={situationLines} blips={blips} />
+          <DetailPanel selection={selection} signals={effSignals} situationLines={situationLines} blips={effBlips} />
         </div>
       </div>
 
@@ -446,7 +594,7 @@ export default function GlobePage() {
             hideHeader
           />
         </Panel>
-        <DetailPanel selection={selection} signals={signals} situationLines={situationLines} blips={blips} />
+        <DetailPanel selection={selection} signals={effSignals} situationLines={situationLines} blips={effBlips} />
       </div>
     </TerminalShell>
   )
