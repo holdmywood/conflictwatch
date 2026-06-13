@@ -205,7 +205,10 @@ export async function clusterHasTrustedSource(urls: string[]): Promise<boolean> 
 }
 
 // Record a domain usage so reliability scores can be computed over time.
+// Skippable in batch contexts (the backfill) where firing one un-awaited upsert
+// per mention URL across many windows would exhaust the DB connection pool.
 export async function recordDomainUsage(domain: string): Promise<void> {
+  if (process.env.WORKER_SKIP_DOMAIN_USAGE === '1') return
   try {
     await prisma.domainReliability.upsert({
       where: { domain },

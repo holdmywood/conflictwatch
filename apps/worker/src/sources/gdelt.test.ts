@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { extractTsvUrls } = await import('./gdelt.js')
+const { extractTsvUrls, windowUrls } = await import('./gdelt.js')
 
 const SAMPLE_LASTUPDATE = `\
 20240601120000.export.CSV.zip http://data.gdeltproject.org/gdeltv2/20240601120000.export.CSV.zip
@@ -20,5 +20,13 @@ describe('extractTsvUrls', () => {
 
   it('throws when index format is unexpected', () => {
     expect(() => extractTsvUrls('garbage input')).toThrow()
+  })
+})
+
+describe('windowUrls', () => {
+  it('builds export and mentions URLs for a historical window timestamp', () => {
+    const { eventsUrl, mentionsUrl } = windowUrls('20260606150000')
+    expect(eventsUrl).toBe('http://data.gdeltproject.org/gdeltv2/20260606150000.export.CSV.zip')
+    expect(mentionsUrl).toBe('http://data.gdeltproject.org/gdeltv2/20260606150000.mentions.CSV.zip')
   })
 })

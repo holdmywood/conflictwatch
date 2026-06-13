@@ -5,6 +5,16 @@ import { clusterHasTrustedSource, bestTier, extractDomain, recordDomainUsage } f
 import type { DataSource, NormalizedEvent } from '../types.js'
 
 const LASTUPDATE_URL = 'http://data.gdeltproject.org/gdeltv2/lastupdate.txt'
+const GDELT_BASE = 'http://data.gdeltproject.org/gdeltv2'
+
+// Build the events + mentions file URLs for a specific 15-minute window.
+// `ts` is a GDELT timestamp: YYYYMMDDHHMMSS aligned to :00/:15/:30/:45 UTC.
+export function windowUrls(ts: string): { eventsUrl: string; mentionsUrl: string } {
+  return {
+    eventsUrl: `${GDELT_BASE}/${ts}.export.CSV.zip`,
+    mentionsUrl: `${GDELT_BASE}/${ts}.mentions.CSV.zip`,
+  }
+}
 
 export function extractTsvUrls(index: string): { eventsUrl: string; mentionsUrl: string } {
   const lines = index.trim().split('\n')
@@ -40,7 +50,21 @@ export class GdeltSource implements DataSource {
       await axios.get<string>(LASTUPDATE_URL, { responseType: 'text', timeout: 15000 })
     ).data
     const { eventsUrl, mentionsUrl } = extractTsvUrls(indexText)
+    return this.fetchFromUrls(eventsUrl, mentionsUrl)
+  }
 
+  // Fetch a specific historical 15-minute window (used by the one-week backfill).
+  // Identical trust-gate + normalization to the live fetch — only the source
+  // files differ. Throws if the window's files are missing (caller skips gaps).
+  async fetchWindow(ts: string): Promise<NormalizedEvent[]> {
+    const { eventsUrl, mentionsUrl } = windowUrls(ts)
+    return this.fetchFromUrls(eventsUrl, mentionsUrl)
+  }
+
+  private async fetchFromUrls(
+    eventsUrl: string,
+    mentionsUrl: string,
+  ): Promise<NormalizedEvent[]> {
     const [eventsTsv, mentionsTsv] = await Promise.all([
       downloadAndDecompress(eventsUrl),
       downloadAndDecompress(mentionsUrl),
