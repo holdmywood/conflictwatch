@@ -50,6 +50,24 @@ function groupByCluster(events: NormalizedEvent[]): Map<string, NormalizedEvent[
   return map
 }
 
+// Retry a DB op on transient connection errors with short backoff. Pool
+// timeouts (P2024) happen when the backfill and the live worker contend for
+// Neon connections; a brief wait usually clears them.
+const TRANSIENT_DB_CODES = new Set(['P2024', 'P1001', 'P1017'])
+async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      if (!TRANSIENT_DB_CODES.has((err as { code?: string }).code ?? '')) throw err
+      await new Promise(r => setTimeout(r, 250 * (i + 1)))
+    }
+  }
+  throw lastErr
+}
+
 async function main(): Promise<void> {
   const dbHost = (process.env.DATABASE_URL ?? '').replace(/:[^:@/]*@/, ':***@').replace(/^.*@/, '')
   console.log(`[backfill] target DB host: ${dbHost || '(unset!)'}`)
@@ -80,40 +98,48 @@ async function main(): Promise<void> {
       const firstEvent = clusterEvents[0]
       if (!firstEvent || !firstEvent.countryCode || isNaN(firstEvent.lat) || isNaN(firstEvent.lng)) continue
 
-      // Known cluster: new mentions are corroboration → accrue, never re-classify.
-      const knownEventId = await clusterExists(clusterId)
-      if (knownEventId) {
+      // Per-cluster isolation: a transient DB hiccup (e.g. pool timeout while
+      // the live worker is also writing) skips one cluster, never the whole
+      // multi-hour run. The job is resumable, so a skipped cluster is retried
+      // on the next pass.
+      try {
+        // Known cluster: new mentions are corroboration → accrue, never re-classify.
+        const knownEventId = await withRetry(() => clusterExists(clusterId))
+        if (knownEventId) {
+          for (const event of clusterEvents) {
+            if (await withRetry(() => isDuplicate(event.globalEventId, event.url))) continue
+            const { accrued: didAccrue, conflictId, confidenceChanged } = await withRetry(() => accrueSourceToCluster(event))
+            if (didAccrue) accrued++
+            if (confidenceChanged && conflictId) touched.add(conflictId)
+          }
+          continue
+        }
+
+        // New cluster: classify once (budget-gated), then persist all mentions.
+        if (classifyUsed >= BUDGET) continue
+        const lead = await fetchBestLeadText(sortUrlsByTier(clusterEvents))
+        if (!lead) continue
+
+        const allSources = clusterEvents.map(e => e.sourceName)
+        const classify = await classifyCluster(lead, {
+          location: firstEvent.region,
+          date: firstEvent.publishedAt.toISOString().slice(0, 10),
+          cameoCategory: firstEvent.eventRootCode,
+          sourceBreadth: new Set(allSources).size,
+        })
+        classifyUsed++
+        if (!classify || !classify.include) continue
+
         for (const event of clusterEvents) {
-          if (await isDuplicate(event.globalEventId, event.url)) continue
-          const { accrued: didAccrue, conflictId, confidenceChanged } = await accrueSourceToCluster(event)
-          if (didAccrue) accrued++
-          if (confidenceChanged && conflictId) touched.add(conflictId)
+          if (await withRetry(() => isDuplicate(event.globalEventId, event.url))) continue
+          const { conflictId, discarded } = await withRetry(() => persistEvent(event, allSources, classify))
+          if (!discarded) {
+            newEvents++
+            touched.add(conflictId)
+          }
         }
-        continue
-      }
-
-      // New cluster: classify once (budget-gated), then persist all mentions.
-      if (classifyUsed >= BUDGET) continue
-      const lead = await fetchBestLeadText(sortUrlsByTier(clusterEvents))
-      if (!lead) continue
-
-      const allSources = clusterEvents.map(e => e.sourceName)
-      const classify = await classifyCluster(lead, {
-        location: firstEvent.region,
-        date: firstEvent.publishedAt.toISOString().slice(0, 10),
-        cameoCategory: firstEvent.eventRootCode,
-        sourceBreadth: new Set(allSources).size,
-      })
-      classifyUsed++
-      if (!classify || !classify.include) continue
-
-      for (const event of clusterEvents) {
-        if (await isDuplicate(event.globalEventId, event.url)) continue
-        const { conflictId, discarded } = await persistEvent(event, allSources, classify)
-        if (!discarded) {
-          newEvents++
-          touched.add(conflictId)
-        }
+      } catch (err) {
+        console.error(`[backfill] cluster ${clusterId} skipped:`, (err as Error).message)
       }
     }
 
