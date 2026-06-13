@@ -5,7 +5,8 @@
   "scripts": {
     "generate": "prisma generate --schema=./schema.prisma",
     "migrate:dev": "prisma migrate dev --schema=./schema.prisma",
-    "studio": "prisma studio --schema=./schema.prisma"
+    "studio": "prisma studio --schema=./schema.prisma",
+    "migrate:deploy": "prisma migrate deploy --schema=./schema.prisma"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0"

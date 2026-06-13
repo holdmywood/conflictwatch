@@ -1,5 +1,8 @@
 generator client {
   provider = "prisma-client-js"
+  // Local dev binary is added automatically; the rhel target is required for
+  // Vercel's serverless runtime and Railway's container.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
