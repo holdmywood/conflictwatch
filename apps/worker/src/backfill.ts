@@ -118,6 +118,16 @@ async function main(): Promise<void> {
     }
 
     processedWindows++
+
+    // Recompute threat periodically so country levels climb visibly during the
+    // run instead of only at the end (this is a long job). Cheap relative to
+    // the classify/fetch work, and the site reads these levels live.
+    if (processedWindows % 12 === 0 && touched.size > 0) {
+      for (const cId of touched) {
+        await recomputeConflictThreat(cId).catch(() => {})
+      }
+    }
+
     if (processedWindows % 10 === 0) {
       console.log(
         `[backfill] window ${ts} | processed=${processedWindows} missing=${missingWindows} ` +
