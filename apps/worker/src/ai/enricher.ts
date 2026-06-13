@@ -28,6 +28,13 @@ export interface ClassifyResult {
   title: string             // ≤90 chars, factual, neutral
   actors: string[]          // real named parties only; [] if unclear
   location_confidence: LocationConfidence
+  // Location read from the article text by the model. GDELT's automated
+  // geocoding is frequently wrong (centroid fallbacks, source-nationality
+  // bias), so the model reports where the event actually occurred. Used to
+  // override GDELT coords only when location_confidence is 'high'.
+  primary_location: string  // "City, Country"; '' if genuinely unclear
+  lat: number | null        // decimal degrees, null if unsure/invalid
+  lng: number | null        // decimal degrees, null if unsure/invalid
 }
 
 // ── System prompt (prompt-cached across calls) ─────────────────────────────
@@ -50,7 +57,10 @@ Respond with ONLY valid JSON matching this schema exactly. No prose, no markdown
   "stability_impact": "<one line: why it matters or plausible further consequences, or 'none'>",
   "title": "<concise factual neutral headline, max 90 chars>",
   "actors": ["<real named parties only; [] if unclear>"],
-  "location_confidence": "high"|"medium"|"low"
+  "location_confidence": "high"|"medium"|"low",
+  "primary_location": "<where the event physically occurred, as 'City, Country'; '' if genuinely unclear>",
+  "lat": <approximate latitude of primary_location in decimal degrees, or null>,
+  "lng": <approximate longitude of primary_location in decimal degrees, or null>
 }
 
 ## Include rules
@@ -93,13 +103,21 @@ CORROBORATION GATE: "nationally-significant" and "severe" require multi-source c
 - If actors are unclear, omit them: "Clashes reported in [Location]" not "Unknown groups clash."
 
 ## Anchor examples (verbatim calibration)
-EXCLUDE (local-isolated, other): headline="Police arrest suspect in local assault" → {"include":false,"exclude_reason":"local crime, no broader fallout","category":"other","significance":"local-isolated","severity":1,"stability_impact":"none","title":"Police arrest suspect in local assault","actors":[],"location_confidence":"high"}
+EXCLUDE (local-isolated, other): headline="Police arrest suspect in local assault" → {"include":false,"exclude_reason":"local crime, no broader fallout","category":"other","significance":"local-isolated","severity":1,"stability_impact":"none","title":"Police arrest suspect in local assault","actors":[],"location_confidence":"low","primary_location":"","lat":null,"lng":null}
 
-INCLUDE (nationally-significant, civil-unrest): headline="Killing sparks nationwide protests, minister resigns" → {"include":true,"exclude_reason":null,"category":"civil-unrest","significance":"nationally-significant","severity":3,"stability_impact":"Political crisis; sustained unrest and government instability possible","title":"Nationwide protests follow killing; minister resigns","actors":[],"location_confidence":"high"}
+INCLUDE (nationally-significant, civil-unrest): Location hint="France", headline="Killing sparks nationwide protests in Paris, minister resigns" → {"include":true,"exclude_reason":null,"category":"civil-unrest","significance":"nationally-significant","severity":3,"stability_impact":"Political crisis; sustained unrest and government instability possible","title":"Nationwide protests follow killing; minister resigns","actors":[],"location_confidence":"high","primary_location":"Paris, France","lat":48.857,"lng":2.352}
 
-INCLUDE (severe, armed-conflict): headline="Sustained shelling and ground combat in contested border region" → {"include":true,"exclude_reason":null,"category":"armed-conflict","significance":"severe","severity":5,"stability_impact":"Territorial control at risk; humanitarian corridor threatened","title":"Sustained shelling and ground combat in [Region]","actors":[],"location_confidence":"high"}
+INCLUDE (severe, armed-conflict): headline="Sustained shelling and ground combat in contested border region" → {"include":true,"exclude_reason":null,"category":"armed-conflict","significance":"severe","severity":5,"stability_impact":"Territorial control at risk; humanitarian corridor threatened","title":"Sustained shelling and ground combat in border region","actors":[],"location_confidence":"low","primary_location":"","lat":null,"lng":null}
 
-EXCLUDE (business mis-coded as conflict): headline="Mining company reports record profits amid operational disruptions" → {"include":false,"exclude_reason":"business/finance content, no armed conflict","category":"other","significance":"local-isolated","severity":1,"stability_impact":"none","title":"Mining company reports record profits","actors":[],"location_confidence":"low"}
+EXCLUDE (business mis-coded as conflict): headline="Mining company reports record profits amid operational disruptions" → {"include":false,"exclude_reason":"business/finance content, no armed conflict","category":"other","significance":"local-isolated","severity":1,"stability_impact":"none","title":"Mining company reports record profits","actors":[],"location_confidence":"low","primary_location":"","lat":null,"lng":null}
+
+## Location (critical — automated geocoding is unreliable)
+- Report where the event PHYSICALLY OCCURRED based on the article text — never where the news outlet is based.
+- The "Location:" line in the input comes from automated geocoding and is OFTEN WRONG. A common failure: it reflects the source outlet's home country (e.g. a Middle-East outlet reporting a UK event gets geocoded to Turkey). Treat the hint as a weak prior and trust the article text over it.
+- primary_location: the most specific place named in the article, as "City, Country" (or "Region, Country"). Provide approximate decimal lat/lng for that place.
+- location_confidence: "high" only when the article clearly states the location and you are confident of the coordinates; "medium" when inferable; "low" when genuinely ambiguous.
+- If location_confidence is "low", set lat and lng to null and primary_location to "".
+- Anchor example: input Location hint "Turkey", headline "Belfast riots after knife attack; thousands attend anti-racism rally" → primary_location "Belfast, United Kingdom", lat 54.597, lng -5.93, location_confidence "high" (the hint is wrong; the article is clearly about Belfast).
 
 ## Neutrality
 State facts and concrete signals only. No partisan framing, no editorial language, no outlet's slant. If sources conflict on framing, describe the dispute plainly. Abstain rather than speculate.`
@@ -184,8 +202,59 @@ function parseClassifyResponse(raw: string): ClassifyResult | null {
       title: obj.title.slice(0, 90),
       actors: Array.isArray(obj.actors) ? obj.actors.filter(a => typeof a === 'string') : [],
       location_confidence: obj.location_confidence ?? 'medium',
+      primary_location: typeof obj.primary_location === 'string' ? obj.primary_location.slice(0, 120) : '',
+      lat: validCoord(obj.lat, 90),
+      lng: validCoord(obj.lng, 180),
     }
   } catch {
     return null
+  }
+}
+
+// Accept a coordinate only if it is a finite number within range. Anything else
+// (null, string, NaN, out-of-range, or the 0,0 null-island artifact) → null.
+function validCoord(v: unknown, bound: number): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null
+  if (v < -bound || v > bound) return null
+  return v
+}
+
+// ── Location resolution ───────────────────────────────────────────────────────
+
+export interface ResolvedLocation {
+  lat: number
+  lng: number
+  region: string
+  locationConfidence: LocationConfidence
+}
+
+// Decide the authoritative location for a classified event. GDELT's ActionGeo is
+// frequently wrong (country-centroid fallbacks, source-nationality bias), so when
+// the classifier is highly confident about the location it read in the article AND
+// supplied valid coordinates, we trust the model over GDELT. Otherwise GDELT's
+// coordinates stand, but the stored confidence reflects the model's uncertainty.
+export function resolveLocation(
+  gdelt: { lat: number; lng: number; region: string },
+  classify: Pick<ClassifyResult, 'lat' | 'lng' | 'primary_location' | 'location_confidence'>,
+): ResolvedLocation {
+  const { lat, lng, primary_location, location_confidence } = classify
+
+  if (
+    location_confidence === 'high' &&
+    typeof lat === 'number' && typeof lng === 'number' &&
+    !(lat === 0 && lng === 0)
+  ) {
+    return {
+      lat,
+      lng,
+      region: (primary_location ?? '').trim() || gdelt.region,
+      locationConfidence: 'high',
+    }
+  }
+  return {
+    lat: gdelt.lat,
+    lng: gdelt.lng,
+    region: gdelt.region,
+    locationConfidence: location_confidence,
   }
 }

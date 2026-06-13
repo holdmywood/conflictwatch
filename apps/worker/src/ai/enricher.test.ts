@@ -9,7 +9,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
-const { classifyCluster } = await import('./enricher.js')
+const { classifyCluster, resolveLocation } = await import('./enricher.js')
 
 const sampleLead: LeadText = {
   headline: 'Sustained shelling reported in eastern Ukraine as Russian forces advance',
@@ -139,5 +139,78 @@ describe('classifyCluster', () => {
     })
     const result = await classifyCluster(sampleLead, sampleContext)
     expect(result).toBeNull()
+  })
+
+  it('parses primary_location and valid coordinates from the response', async () => {
+    const withCoords = JSON.stringify({
+      ...JSON.parse(validIncludeResponse),
+      primary_location: 'Belfast, United Kingdom',
+      lat: 54.597,
+      lng: -5.93,
+    })
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: withCoords }] })
+    const result = await classifyCluster(sampleLead, sampleContext)
+    expect(result!.primary_location).toBe('Belfast, United Kingdom')
+    expect(result!.lat).toBe(54.597)
+    expect(result!.lng).toBe(-5.93)
+  })
+
+  it('rejects out-of-range coordinates as null', async () => {
+    const badCoords = JSON.stringify({
+      ...JSON.parse(validIncludeResponse),
+      lat: 999, lng: -5.93,
+    })
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: badCoords }] })
+    const result = await classifyCluster(sampleLead, sampleContext)
+    expect(result!.lat).toBeNull()
+    expect(result!.lng).toBe(-5.93)
+  })
+
+  it('defaults coordinates to null when the model omits them', async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: 'text', text: validIncludeResponse }] })
+    const result = await classifyCluster(sampleLead, sampleContext)
+    expect(result!.lat).toBeNull()
+    expect(result!.lng).toBeNull()
+    expect(result!.primary_location).toBe('')
+  })
+})
+
+describe('resolveLocation', () => {
+  const gdelt = { lat: 39.06, lng: 34.91, region: 'Turkey' } // GDELT's wrong centroid
+
+  it('overrides GDELT coords when the model is highly confident with valid coords', () => {
+    const r = resolveLocation(gdelt, {
+      lat: 54.597, lng: -5.93, primary_location: 'Belfast, United Kingdom', location_confidence: 'high',
+    })
+    expect(r.lat).toBe(54.597)
+    expect(r.lng).toBe(-5.93)
+    expect(r.region).toBe('Belfast, United Kingdom')
+    expect(r.locationConfidence).toBe('high')
+  })
+
+  it('keeps GDELT coords when the model is not highly confident', () => {
+    const r = resolveLocation(gdelt, {
+      lat: 54.597, lng: -5.93, primary_location: 'Belfast, United Kingdom', location_confidence: 'medium',
+    })
+    expect(r.lat).toBe(39.06)
+    expect(r.lng).toBe(34.91)
+    expect(r.region).toBe('Turkey')
+    expect(r.locationConfidence).toBe('medium')
+  })
+
+  it('keeps GDELT coords when the model gives no coordinates', () => {
+    const r = resolveLocation(gdelt, {
+      lat: null, lng: null, primary_location: '', location_confidence: 'high',
+    })
+    expect(r.lat).toBe(39.06)
+    expect(r.lng).toBe(34.91)
+  })
+
+  it('rejects the 0,0 null-island artifact even at high confidence', () => {
+    const r = resolveLocation(gdelt, {
+      lat: 0, lng: 0, primary_location: 'Nowhere', location_confidence: 'high',
+    })
+    expect(r.lat).toBe(39.06)
+    expect(r.lng).toBe(34.91)
   })
 })

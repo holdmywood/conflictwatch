@@ -3,7 +3,7 @@ import { toEventType, scoreConfidence } from './score.js'
 import { buildTitle } from './normalize.js'
 import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
-import type { ClassifyResult } from '../ai/enricher.js'
+import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
 
 // Cumulative threat aggregation over AI severity scores (1–5).
 // The aggregation rule lives in @conflictwatch/db (threatFromSeverities) so
@@ -100,24 +100,33 @@ export async function persistEvent(
   // Title comes from AI; buildTitle is the fallback for unenriched events (backfill only)
   const title = classify.title
 
+  // Authoritative location: the AI corrects GDELT's frequently-wrong geocoding
+  // when it is highly confident. Country-level grouping (cId) still keys off
+  // GDELT's country code — correcting that requires the AI to emit a country
+  // code and is a separate change.
+  const loc = resolveLocation(
+    { lat: event.lat, lng: event.lng, region: event.region },
+    classify,
+  )
+
   const cId = conflictId(event.countryCode)
 
   await prisma.conflict.upsert({
     where: { id: cId },
     create: {
       id: cId,
-      name: event.region.split(',').pop()?.trim() ?? event.countryCode,
+      name: loc.region.split(',').pop()?.trim() ?? event.countryCode,
       region: event.countryCode,
       status: 'active',
       // Threat comes only from sustained corroborated evidence
       // (recomputeConflictThreat at cycle end) — never from one event.
       threatLevel: 1,
-      lat: event.lat,
-      lng: event.lng,
+      lat: loc.lat,
+      lng: loc.lng,
     },
     update: {
-      lat: event.lat,
-      lng: event.lng,
+      lat: loc.lat,
+      lng: loc.lng,
       status: 'active',
     },
   })
@@ -134,9 +143,9 @@ export async function persistEvent(
       actor1: event.actor1Name || null,
       actor2: event.actor2Name || null,
       eventType,
-      lat: event.lat,
-      lng: event.lng,
-      region: event.region,
+      lat: loc.lat,
+      lng: loc.lng,
+      region: loc.region,
       confidence,
       publishedAt: event.publishedAt,
       conflictId: cId,
@@ -146,7 +155,7 @@ export async function persistEvent(
       category: classify.category,
       stabilityImpact: classify.stability_impact,
       sourceTier: event.sourceTier,
-      locationConfidence: classify.location_confidence,
+      locationConfidence: loc.locationConfidence,
       classified: true,
       // §12 / §A5: set only on first classification
       firstReportAt: event.publishedAt,
@@ -164,7 +173,10 @@ export async function persistEvent(
       significance: classify.significance,
       category: classify.category,
       stabilityImpact: classify.stability_impact,
-      locationConfidence: classify.location_confidence,
+      region: loc.region,
+      lat: loc.lat,
+      lng: loc.lng,
+      locationConfidence: loc.locationConfidence,
     },
   })
 

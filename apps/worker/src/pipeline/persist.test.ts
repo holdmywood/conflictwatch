@@ -64,6 +64,9 @@ const sampleClassify: ClassifyResult = {
   title: 'Russian forces clash with Ukrainian defenders near Kyiv',
   actors: ['Russia', 'Ukraine'],
   location_confidence: 'high',
+  primary_location: '',
+  lat: null,
+  lng: null,
 }
 
 // Threshold summary (MIN_EVENTS = { 5:15, 4:5, 3:3, 2:2 } with cumulative counting):
@@ -114,6 +117,48 @@ describe('persistEvent', () => {
     expect(mockUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({ title: sampleClassify.title }),
+      })
+    )
+  })
+
+  it('overrides GDELT coords with AI location when the model is highly confident', async () => {
+    // GDELT mis-coded this to Turkey; the AI confidently reads Belfast.
+    const wrongGeoEvent: NormalizedEvent = {
+      ...sampleEvent, lat: 39.06, lng: 34.91, region: 'Turkey',
+    }
+    const corrected: ClassifyResult = {
+      ...sampleClassify,
+      location_confidence: 'high',
+      primary_location: 'Belfast, United Kingdom',
+      lat: 54.597,
+      lng: -5.93,
+    }
+    await persistEvent(wrongGeoEvent, ['Reuters'], corrected)
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { clusterId: '1234567890' },
+        create: expect.objectContaining({
+          lat: 54.597, lng: -5.93, region: 'Belfast, United Kingdom', locationConfidence: 'high',
+        }),
+      })
+    )
+  })
+
+  it('keeps GDELT coords when AI location confidence is not high', async () => {
+    const lowConf: ClassifyResult = {
+      ...sampleClassify,
+      location_confidence: 'low',
+      primary_location: 'Belfast, United Kingdom',
+      lat: 54.597,
+      lng: -5.93,
+    }
+    await persistEvent(sampleEvent, ['Reuters'], lowConf)
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { clusterId: '1234567890' },
+        create: expect.objectContaining({
+          lat: sampleEvent.lat, lng: sampleEvent.lng, region: sampleEvent.region, locationConfidence: 'low',
+        }),
       })
     )
   })
