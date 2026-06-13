@@ -6,10 +6,12 @@ import type { NormalizedEvent } from '../types.js'
 // A row must pass ALL gates to reach the database.
 // Tune these to tighten/loosen noise suppression.
 
-// Minimum distinct outlets (GDELT NumSources) that have covered this event globally.
-// Genuine armed-conflict events are covered by many outlets; single-outlet mis-coded
-// business/finance stories (e.g. mining investor articles) fail this gate instantly.
-const MIN_SOURCES = 3
+// Minimum distinct source collections (GDELT NumSources) for this event.
+// NOTE: we poll the 15-MINUTE export, where NumSources is almost always 1 — it
+// only climbs in the daily aggregated files over time. A value >1 here rejects
+// effectively 100% of events. Corroboration is instead enforced via MIN_ARTICLES
+// below (≥5 articles), which is populated meaningfully in the 15-min slice.
+const MIN_SOURCES = 1
 
 // Minimum total article count (GDELT NumArticles) in global coverage.
 const MIN_ARTICLES = 5

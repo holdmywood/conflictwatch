@@ -132,11 +132,18 @@ describe('parseEventRow', () => {
     expect(parseEventRow(row.join('\t'))).toBeNull()
   })
 
-  // Gate 2: corroboration
-  it('returns null when NumSources is below minimum (single-outlet story)', () => {
+  // Gate 2: corroboration. NumSources in the 15-min export is ~always 1, so the
+  // floor is 1 (presence); corroboration is carried by NumArticles below.
+  it('returns null when NumSources is below minimum (0 = no source)', () => {
     const row = SAMPLE_EVENT_ROW.split('\t')
-    row[32] = '2'  // NumSources < MIN_SOURCES (3)
+    row[32] = '0'  // NumSources < MIN_SOURCES (1)
     expect(parseEventRow(row.join('\t'))).toBeNull()
+  })
+
+  it('accepts a single-source event when other gates pass (15-min cadence reality)', () => {
+    const row = SAMPLE_EVENT_ROW.split('\t')
+    row[32] = '1'  // NumSources == MIN_SOURCES (1)
+    expect(parseEventRow(row.join('\t'))).not.toBeNull()
   })
 
   it('returns null when NumArticles is below minimum', () => {

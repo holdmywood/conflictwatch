@@ -43,6 +43,15 @@ describe('domainTier', () => {
     expect(await domainTier('https://dawn.com/article')).toBe('tier2')
   })
 
+  it('matches a known parent domain reached via subdomain', async () => {
+    // english.elpais.com is not a cache key, but elpais.com (tier2) is
+    expect(await domainTier('https://english.elpais.com/world/article')).toBe('tier2')
+  })
+
+  it('does not over-strip multi-label parents (bbc.co.uk stays tier1)', async () => {
+    expect(await domainTier('https://www.bbc.co.uk/news')).toBe('tier1')
+  })
+
   it('returns specialist for ACLED', async () => {
     expect(await domainTier('https://acleddata.com/dataset')).toBe('specialist')
   })
@@ -90,9 +99,18 @@ describe('clusterHasTrustedSource', () => {
     expect(await clusterHasTrustedSource(urls)).toBe(false)
   })
 
-  it('returns false when all sources are unknown', async () => {
+  it('returns true when sources are unknown but non-blocked (only fabrication is gated)', async () => {
     const urls = ['https://unknownblog.xyz/post', 'https://random-site.io/article']
-    expect(await clusterHasTrustedSource(urls)).toBe(false)
+    expect(await clusterHasTrustedSource(urls)).toBe(true)
+  })
+
+  it('returns true when a blocked source is mixed with a non-blocked one', async () => {
+    const urls = ['https://rt.com/news', 'https://timeslive.co.za/story']
+    expect(await clusterHasTrustedSource(urls)).toBe(true)
+  })
+
+  it('rejects a blocked source reached via subdomain', async () => {
+    expect(await clusterHasTrustedSource(['https://news.rt.com/story'])).toBe(false)
   })
 
   it('returns false for empty URL list', async () => {

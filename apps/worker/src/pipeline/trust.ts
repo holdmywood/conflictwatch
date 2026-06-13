@@ -145,11 +145,28 @@ export function extractDomain(url: string): string {
   }
 }
 
+// Resolve a host to a tier, matching subdomains against parent domains.
+// Tries the exact host first, then strips one leading label at a time and
+// re-checks — but only ever returns an actual cache hit, so we never guess a
+// registrable domain (avoids the co.uk / com.au public-suffix trap).
+// e.g. english.elpais.com → elpais.com; news.rt.com → rt.com (blocked).
+function lookupTier(host: string, tiers: Map<string, Tier>): Tier {
+  let h = host
+  while (h.split('.').length >= 2) {
+    const t = tiers.get(h)
+    if (t) return t
+    const dot = h.indexOf('.')
+    if (dot < 0) break
+    h = h.slice(dot + 1)
+  }
+  return 'unknown'
+}
+
 export async function domainTier(url: string): Promise<Tier> {
   const domain = extractDomain(url)
   if (!domain) return 'unknown'
   const tiers = await getCache()
-  return tiers.get(domain) ?? 'unknown'
+  return lookupTier(domain, tiers)
 }
 
 // Returns the highest tier found across a list of URLs.
@@ -163,30 +180,28 @@ export async function bestTier(urls: string[]): Promise<Tier> {
   const tiers = await getCache()
   for (const url of urls) {
     const domain = extractDomain(url)
-    const t = (domain ? (tiers.get(domain) ?? 'unknown') : 'unknown') as Tier
+    const t = domain ? lookupTier(domain, tiers) : 'unknown'
     if (TIER_RANK[t] > TIER_RANK[best]) best = t
   }
   return best
 }
 
-// A cluster passes if at least one source URL is tier1, tier2, or specialist.
-// Clusters where all sources are blocked/review/unknown are rejected.
-// Unknown domains are logged for the review queue.
+// A cluster passes if at least one source URL is from a non-blocked domain.
+// Only clusters whose every source is on the fabrication 'blocked' list are
+// rejected. The heavy lifting is done upstream by the conflict-severity gates
+// (CAMEO codes, Goldstein, tone, article count) and downstream by AI
+// classification; this gate exists solely to keep known-fabrication outlets out.
 export async function clusterHasTrustedSource(urls: string[]): Promise<boolean> {
   const tiers = await getCache()
-  let hasTrusted = false
+  let hasUsable = false
   for (const url of urls) {
     const domain = extractDomain(url)
     if (!domain) continue
-    const t = (tiers.get(domain) ?? 'unknown') as Tier
-    if (t === 'unknown') {
-      console.log(`[trust] review: unrecognized domain "${domain}" — add to DomainReliability to promote`)
-    }
-    if (t === 'tier1' || t === 'tier2' || t === 'specialist') {
-      hasTrusted = true
+    if (lookupTier(domain, tiers) !== 'blocked') {
+      hasUsable = true
     }
   }
-  return hasTrusted
+  return hasUsable
 }
 
 // Record a domain usage so reliability scores can be computed over time.
