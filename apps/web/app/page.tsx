@@ -177,38 +177,59 @@ export default function GlobePage() {
   }, [replay.active, replay.playing, replay.speed])
 
 
+  // Live data polls every 60s (matching the worker's ingestion cadence) so an
+  // open tab updates without a manual refresh, and re-fetches immediately when
+  // the tab regains focus. The live state it sets is ignored while replaying.
   useEffect(() => {
-    fetch('/api/conflicts')
-      .then(r => (r.ok ? r.json() : Promise.reject()))
-      .then((data: ConflictRow[]) => {
-        setConflicts(data)
-        // Default selection: highest-threat conflict (API is threat-desc)
-        setSelection(prev =>
-          prev ?? (data[0] ? { type: 'country', name: data[0].name, conflict: data[0] } : null)
-        )
-      })
-      .catch(() => setConflictsError(true))
+    const REFRESH_MS = 60_000
+    let cancelled = false
 
-    fetch('/api/signals')
-      .then(r => (r.ok ? r.json() : Promise.reject()))
-      .then((d: { signals: Signal[] }) => setSignals(new Map(d.signals.map(s => [s.targetId, s]))))
-      .catch(() => {})
+    const loadLive = () => {
+      fetch('/api/conflicts')
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then((data: ConflictRow[]) => {
+          if (cancelled) return
+          setConflicts(data)
+          setConflictsError(false)
+          // Default selection only on first load; never clobber the user's pick.
+          setSelection(prev =>
+            prev ?? (data[0] ? { type: 'country', name: data[0].name, conflict: data[0] } : null)
+          )
+        })
+        .catch(() => { if (!cancelled) setConflictsError(true) })
 
-    fetch('/api/feed')
-      .then(r => (r.ok ? r.json() : Promise.reject()))
-      .then((d: { events: FeedEvent[] }) =>
-        setBlips(
-          d.events
-            .filter(e => Number.isFinite(e.lat) && Number.isFinite(e.lng) && !(e.lat === 0 && e.lng === 0))
-            .map(e => ({
-              id: e.id, title: e.title, lat: e.lat, lng: e.lng,
-              severity: e.severity, publishedAt: e.publishedAt, sources: e.sources,
-              stabilityImpact: (e as { stabilityImpact?: string }).stabilityImpact,
-              sourceTier: (e as { sourceTier?: string }).sourceTier,
-            }))
-        )
-      )
-      .catch(() => {})
+      fetch('/api/signals')
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then((d: { signals: Signal[] }) => { if (!cancelled) setSignals(new Map(d.signals.map(s => [s.targetId, s]))) })
+        .catch(() => {})
+
+      fetch('/api/feed')
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then((d: { events: FeedEvent[] }) => {
+          if (cancelled) return
+          setBlips(
+            d.events
+              .filter(e => Number.isFinite(e.lat) && Number.isFinite(e.lng) && !(e.lat === 0 && e.lng === 0))
+              .map(e => ({
+                id: e.id, title: e.title, lat: e.lat, lng: e.lng,
+                severity: e.severity, publishedAt: e.publishedAt, sources: e.sources,
+                stabilityImpact: (e as { stabilityImpact?: string }).stabilityImpact,
+                sourceTier: (e as { sourceTier?: string }).sourceTier,
+              }))
+          )
+        })
+        .catch(() => {})
+    }
+
+    loadLive()
+    const id = setInterval(loadLive, REFRESH_MS)
+    const onVisible = () => { if (document.visibilityState === 'visible') loadLive() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   // Lens data loads lazily — the disasters feed is only fetched when the
