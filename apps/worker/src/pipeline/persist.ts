@@ -5,6 +5,7 @@ import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
 import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
 import type { CuratedEvent } from '../sources/ucdp.js'
+import { conflictNameFromId } from '../lib/fips-countries.js'
 
 // Recency-weighted threat aggregation over AI severity scores (1–5).
 // The aggregation rule lives in @conflictwatch/db (threatFromEvents) so the
@@ -114,12 +115,14 @@ export async function persistEvent(
   )
 
   const cId = conflictId(event.countryCode)
+  // Name from the stable FIPS code, not GDELT's unreliable geo label.
+  const conflictName = conflictNameFromId(cId) ?? loc.region.split(',').pop()?.trim() ?? event.countryCode
 
   await prisma.conflict.upsert({
     where: { id: cId },
     create: {
       id: cId,
-      name: loc.region.split(',').pop()?.trim() ?? event.countryCode,
+      name: conflictName,
       region: event.countryCode,
       status: 'active',
       // Threat comes only from sustained corroborated evidence
@@ -129,6 +132,8 @@ export async function persistEvent(
       lng: loc.lng,
     },
     update: {
+      // Self-heal the name from FIPS only when we have a canonical one.
+      ...(conflictNameFromId(cId) ? { name: conflictName } : {}),
       lat: loc.lat,
       lng: loc.lng,
       status: 'active',
@@ -208,19 +213,23 @@ export async function persistCuratedEvent(
   e: CuratedEvent,
 ): Promise<{ conflictId: string; eventId: string; created: boolean }> {
   const cId = conflictId(e.countryCode)
+  const conflictName = conflictNameFromId(cId) ?? e.region.split(',').pop()?.trim() ?? e.countryCode
 
   await prisma.conflict.upsert({
     where: { id: cId },
     create: {
       id: cId,
-      name: e.region.split(',').pop()?.trim() || e.countryCode,
+      name: conflictName,
       region: e.countryCode,
       status: 'active',
       threatLevel: 1, // threat comes only from recomputeConflictThreat
       lat: e.lat,
       lng: e.lng,
     },
-    update: { status: 'active' },
+    update: {
+      ...(conflictNameFromId(cId) ? { name: conflictName } : {}),
+      status: 'active',
+    },
   })
 
   const existing = await prisma.event.findUnique({
