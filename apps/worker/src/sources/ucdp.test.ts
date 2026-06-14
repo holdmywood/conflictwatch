@@ -42,6 +42,7 @@ describe('mapUcdpRow', () => {
     expect(e.lat).toBeCloseTo(31.546397, 5)
     expect(e.lng).toBeCloseTo(34.495142, 5)
     expect(e.severity).toBe(2) // best=1
+    expect(e.fatalities).toBe(1) // raw `best` stored for lethality weighting
     expect(e.confidence).toBe('high')
     expect(e.locationConfidence).toBe('high')
     expect(e.category).toBe('armed-conflict')

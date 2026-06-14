@@ -40,7 +40,7 @@ export async function GET(req: Request) {
         locationConfidence: { not: 'low' },
         conflictId: { not: null },
       },
-      select: { conflictId: true, severity: true, publishedAt: true },
+      select: { conflictId: true, severity: true, publishedAt: true, fatalities: true, category: true, clusterId: true },
     }),
     // Recent events for globe blips (72h before asOf)
     prisma.event.findMany({
@@ -73,7 +73,13 @@ export async function GET(req: Request) {
   const evByConflict = new Map<string, ThreatEvent[]>()
   for (const e of windowEvents) {
     const list = evByConflict.get(e.conflictId!) ?? []
-    list.push({ severity: e.severity, publishedAt: e.publishedAt })
+    list.push({
+      severity: e.severity,
+      publishedAt: e.publishedAt,
+      fatalities: e.fatalities,
+      category: e.category,
+      curated: e.clusterId.startsWith('ucdp-'),
+    })
     evByConflict.set(e.conflictId!, list)
   }
 

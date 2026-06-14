@@ -40,9 +40,17 @@ export async function recomputeConflictThreat(cId: string): Promise<number> {
       locationConfidence: { not: 'low' },
       classified: true,
     },
-    select: { severity: true, publishedAt: true, lat: true, lng: true },
+    select: { severity: true, publishedAt: true, lat: true, lng: true, fatalities: true, category: true, clusterId: true },
   })
-  const level = threatFromEvents(events)
+  const level = threatFromEvents(
+    events.map(e => ({
+      severity: e.severity,
+      publishedAt: e.publishedAt,
+      fatalities: e.fatalities,
+      category: e.category,
+      curated: e.clusterId.startsWith('ucdp-'),
+    })),
+  )
 
   const data: { threatLevel: number; lat?: number; lng?: number } = { threatLevel: level }
   const lats = events.map(e => e.lat).filter(Number.isFinite)
@@ -271,6 +279,7 @@ export async function persistCuratedEvent(
       publishedAt: e.publishedAt,
       conflictId: cId,
       severity: e.severity,
+      fatalities: e.fatalities,
       sourceTier: e.sourceTier,
       locationConfidence: e.locationConfidence,
       classified: true,
@@ -281,6 +290,7 @@ export async function persistCuratedEvent(
       title: e.title,
       summary: e.summary,
       severity: e.severity,
+      fatalities: e.fatalities,
       category: e.category,
       significance: e.significance,
       region: e.region,
@@ -339,7 +349,8 @@ export async function bulkPersistCurated(
         eventType: e.eventType, category: e.category, significance: e.significance,
         lat: e.lat, lng: e.lng, region: e.region, confidence: e.confidence,
         publishedAt: e.publishedAt, conflictId: conflictId(e.countryCode),
-        severity: e.severity, sourceTier: e.sourceTier, locationConfidence: e.locationConfidence,
+        severity: e.severity, fatalities: e.fatalities, sourceTier: e.sourceTier,
+        locationConfidence: e.locationConfidence,
         classified: true, firstReportAt: e.publishedAt, signalAt: e.publishedAt,
       })),
       skipDuplicates: true,

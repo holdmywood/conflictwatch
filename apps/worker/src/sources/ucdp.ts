@@ -40,6 +40,7 @@ export interface CuratedEvent {
   lat: number
   lng: number
   severity: number // 1–5
+  fatalities: number // UCDP `best` estimate — drives lethality-weighted intensity
   eventType: string
   category: string
   significance: string
@@ -179,6 +180,7 @@ export function mapUcdpRow(row: Record<string, string>): CuratedEvent | null {
     lat,
     lng,
     severity,
+    fatalities: best,
     eventType: VIOLENCE_EVENT_TYPE[tov] ?? 'armed_conflict',
     category: VIOLENCE_CATEGORY[tov] ?? 'armed-conflict',
     significance: significanceFor(severity),
