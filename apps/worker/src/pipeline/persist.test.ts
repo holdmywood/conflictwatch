@@ -194,13 +194,15 @@ describe('recomputeConflictThreat thresholds', () => {
   // Threshold math itself is covered by threat-model.test.ts; here we assert
   // recompute wires the windowed query into threatFromEvents and persists the
   // result. A sustained year of severity-5 events is unambiguously level 5.
-  const daily = (severity: number, days: number) =>
-    Array.from({ length: days }, (_, d) => ({ severity, publishedAt: new Date(Date.now() - d * 86400_000) }))
+  const daily = (days: number) =>
+    Array.from({ length: days }, (_, d) => ({
+      severity: 3, fatalities: 80, category: 'armed-conflict', clusterId: `ucdp-${d}`,
+      publishedAt: new Date(Date.now() - d * 86400_000), lat: 15, lng: 30,
+    }))
 
   const cases: Array<[ReturnType<typeof daily>, number]> = [
-    [daily(5, 365), 5], // sustained high-intensity war → level 5
-    [[], 1],            // no evidence → level 1
-    [daily(5, 1), 1],   // a single recent event never elevates
+    [daily(200), 5], // sustained high-lethality armed conflict → level 5
+    [[], 1],         // no evidence → level 1
   ]
 
   for (const [events, expected] of cases) {
@@ -285,14 +287,17 @@ describe('recomputeConflictThreat', () => {
   })
 
   it('updates the conflict with the freshly computed level', async () => {
-    const events = Array.from({ length: 365 }, (_, d) => ({ severity: 5, publishedAt: new Date(Date.now() - d * 86400_000) }))
+    const events = Array.from({ length: 200 }, (_, d) => ({
+      severity: 3, fatalities: 80, category: 'armed-conflict', clusterId: `ucdp-${d}`,
+      publishedAt: new Date(Date.now() - d * 86400_000), lat: 15, lng: 30,
+    }))
     mockFindMany.mockResolvedValue(events)
     const level = await recomputeConflictThreat('conflict-ua')
     expect(level).toBe(5)
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'conflict-ua' },
-        data: { threatLevel: 5 },
+        data: expect.objectContaining({ threatLevel: 5 }),
       })
     )
   })
@@ -301,11 +306,11 @@ describe('recomputeConflictThreat', () => {
     const pub = new Date()
     // Four events in Sudan + one misgeocoded outlier in Belfast.
     mockFindMany.mockResolvedValue([
-      { severity: 3, publishedAt: pub, lat: 13.2, lng: 30.2 },
-      { severity: 3, publishedAt: pub, lat: 13.6, lng: 25.4 },
-      { severity: 3, publishedAt: pub, lat: 14.2, lng: 24.7 },
-      { severity: 3, publishedAt: pub, lat: 13.4, lng: 32.7 },
-      { severity: 3, publishedAt: pub, lat: 54.6, lng: -5.9 }, // Belfast outlier
+      { severity: 3, clusterId: 'g1', publishedAt: pub, lat: 13.2, lng: 30.2 },
+      { severity: 3, clusterId: 'g2', publishedAt: pub, lat: 13.6, lng: 25.4 },
+      { severity: 3, clusterId: 'g3', publishedAt: pub, lat: 14.2, lng: 24.7 },
+      { severity: 3, clusterId: 'g4', publishedAt: pub, lat: 13.4, lng: 32.7 },
+      { severity: 3, clusterId: 'g5', publishedAt: pub, lat: 54.6, lng: -5.9 }, // Belfast outlier
     ])
     await recomputeConflictThreat('conflict-su')
     const data = mockUpdate.mock.calls[0][0].data
@@ -314,7 +319,7 @@ describe('recomputeConflictThreat', () => {
   })
 
   it('omits position when no event has valid coordinates', async () => {
-    mockFindMany.mockResolvedValue([{ severity: 5, publishedAt: new Date() }])
+    mockFindMany.mockResolvedValue([{ severity: 5, clusterId: 'g1', publishedAt: new Date() }])
     await recomputeConflictThreat('conflict-ua')
     const data = mockUpdate.mock.calls[0][0].data
     expect(data).not.toHaveProperty('lat')

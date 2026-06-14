@@ -15,9 +15,11 @@ export { inferZonesFromRegion, REGION_ZONE_MAP } from './zone-matcher.ts'
 export { analogueDistance, ANALOGUE_SCALE, type AnalogueFeatures } from './analogue-distance.ts'
 export {
   threatFromEvents,
+  eventIntensity,
   recencyWeight,
   HALF_LIFE_MS,
   THREAT_LOOKBACK_MS,
   SUM_THRESHOLDS,
+  FATALITY_CAP,
   type ThreatEvent,
 } from './threat-model.ts'

@@ -68,6 +68,9 @@ model Event {
   sources     EventSource[]
   // §2: AI classification fields
   severity           Int      @default(1)
+  // Fatality count (UCDP `best` estimate); 0 for sources without fatality data
+  // (GDELT). Drives lethality-weighted threat intensity.
+  fatalities         Int      @default(0)
   significance       String   @default("")
   category           String   @default("")
   stabilityImpact    String   @default("")

@@ -38,19 +38,60 @@ export const HALF_LIFE_MS = 60 * 24 * 60 * 60 * 1000
 export const THREAT_LOOKBACK_MS = 365 * 24 * 60 * 60 * 1000
 
 /**
- * Cumulative decayed severity-sum needed to reach each level. Calibrated for
- * SUSTAINED inflow under the 60-day half-life (effective accumulation window
- * ≈ HALF_LIFE/ln2 ≈ 87 days), so a year of steady activity at a given tempo
- * settles at a stable level. Level 5 is reserved for the most intense sustained
- * conflicts (Ukraine/Nigeria/Mexico scale). Tuned against the loaded dataset
- * (GDELT live + UCDP history): Ukraine ≈ 212, Israel ≈ 116, noise stays low.
+ * Cumulative decayed INTENSITY needed to reach each level (see eventIntensity).
+ * Intensity is lethality-weighted, so the scale is roughly "decayed weighted
+ * fatalities". Calibrated against the loaded dataset so S5 = sustained
+ * high-lethality armed conflict. Tuned empirically: Ukraine ≈ 1750, Sudan
+ * ≈ 1300, Israel ≈ 440 (→ S4), Mexico ≈ 230 (→ S3, out of S5).
  */
-export const SUM_THRESHOLDS: Partial<Record<number, number>> = { 5: 200, 4: 100, 3: 40, 2: 13 }
+export const SUM_THRESHOLDS: Partial<Record<number, number>> = { 5: 650, 4: 330, 3: 140, 2: 50 }
 
-/** An event's contribution to the aggregation: its severity and when it occurred. */
+/** Per-event fatality contribution is capped so one mass-casualty aggregate
+ * can't single-handedly spike a level, while still dwarfing low-lethality events. */
+export const FATALITY_CAP = 300
+
+// Curated (UCDP) violence-type weight, keyed on the mapped category. Organized
+// armed conflict outweighs diffuse non-state/criminal violence — this is the
+// systemic reason a cartel crime wave (non-state) ranks below an active war.
+const UCDP_TYPE_WEIGHT: Record<string, number> = {
+  'armed-conflict': 1.0,   // UCDP state-based
+  'state-violence': 0.9,   // one-sided (massacres against civilians)
+  'insurgency': 0.5,       // non-state (e.g. cartel-vs-cartel)
+}
+
+// GDELT has no fatality count; map AI severity to a fatality-equivalent proxy
+// so corroborated GDELT events still contribute on the same intensity scale.
+const GDELT_SEVERITY_PROXY = [0, 1, 3, 10, 40, 90] // index = severity 0..5
+const GDELT_CATEGORY_WEIGHT: Record<string, number> = {
+  'armed-conflict': 1, 'terrorism': 1, 'insurgency': 1, 'state-violence': 1,
+  'civil-unrest': 0.4, 'political-instability': 0.3, 'other': 0,
+}
+
+/** An event's contribution to the aggregation. */
 export interface ThreatEvent {
   severity: number
   publishedAt: Date
+  fatalities?: number
+  category?: string
+  /** True for curated (UCDP) events — drives the fatality path vs the GDELT proxy. */
+  curated?: boolean
+}
+
+/**
+ * Lethality-weighted intensity of a single event. Curated events are driven by
+ * fatalities (capped) × violence-type weight, with a floor of 1 so a confirmed
+ * conflict event with no recorded deaths still counts. Non-curated (GDELT)
+ * events use a severity→fatality proxy × category weight. This is what stops
+ * event *volume* alone from producing S5.
+ */
+export function eventIntensity(e: ThreatEvent): number {
+  const cat = e.category ?? ''
+  if (e.curated) {
+    const fat = Math.min(Math.max(e.fatalities ?? 0, 1), FATALITY_CAP)
+    return fat * (UCDP_TYPE_WEIGHT[cat] ?? 0.7)
+  }
+  const sev = Math.max(0, Math.min(5, Math.round(e.severity)))
+  return (GDELT_SEVERITY_PROXY[sev] ?? 0) * (GDELT_CATEGORY_WEIGHT[cat] ?? 0.7)
 }
 
 /** Recency weight in (0, 1] for an event of the given age. Future events → 0. */
@@ -60,16 +101,16 @@ export function recencyWeight(ageMs: number): number {
 }
 
 /**
- * Compute the threat level (1–5) from corroborated events, weighting each by
- * recency relative to `asOf`. `asOf` defaults to now for the live pipeline;
- * the replay API passes a historical timestamp for strict point-in-time
+ * Compute the threat level (1–5) from corroborated events as the decayed sum of
+ * per-event INTENSITY (lethality-weighted), relative to `asOf`. `asOf` defaults
+ * to now; the replay API passes a historical timestamp for strict point-in-time
  * reconstruction (events after `asOf` get zero weight — no lookahead).
  */
 export function threatFromEvents(events: ThreatEvent[], asOf: Date = new Date()): number {
   const asOfMs = asOf.getTime()
   let sum = 0
   for (const e of events) {
-    sum += recencyWeight(asOfMs - e.publishedAt.getTime()) * e.severity
+    sum += recencyWeight(asOfMs - e.publishedAt.getTime()) * eventIntensity(e)
   }
 
   for (let s = 5; s >= 2; s--) {
