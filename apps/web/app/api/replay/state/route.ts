@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server'
-import { prisma, threatFromSeverities, THREAT_WINDOW_MS } from '@conflictwatch/db'
+import { prisma, threatFromEvents, THREAT_LOOKBACK_MS, type ThreatEvent } from '@conflictwatch/db'
 
 /**
  * Platform state as knowable at a historical instant.
  *
  * Strictly point-in-time: events by publishedAt ≤ asOf, signals by
- * computedAt ≤ asOf, and per-conflict threat RECOMPUTED from the trailing
- * window before asOf using the same shared aggregation the live pipeline
- * uses (threatFromSeverities) — replayed history is the production logic
- * applied to historical evidence, never a stored guess.
+ * computedAt ≤ asOf, and per-conflict threat RECOMPUTED from the evidence
+ * before asOf using the same shared aggregation the live pipeline uses
+ * (threatFromEvents, with asOf as the recency-decay reference) — replayed
+ * history is the production logic applied to historical evidence, never a
+ * stored guess. Events after asOf get zero weight, so there is no lookahead.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url)
@@ -24,13 +25,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'asOf cannot be in the future.' }, { status: 400 })
   }
 
-  const windowStart = new Date(asOf.getTime() - THREAT_WINDOW_MS)
+  const windowStart = new Date(asOf.getTime() - THREAT_LOOKBACK_MS)
 
   const [conflicts, windowEvents, blipEvents, signals] = await Promise.all([
     prisma.conflict.findMany({
       select: { id: true, name: true, region: true, lat: true, lng: true, currentSituationLine: true },
     }),
-    // Corroborated events in the threat window — drive historical threat
+    // Corroborated events within the lookback — recency-weighted into threat
     prisma.event.findMany({
       where: {
         publishedAt: { gte: windowStart, lte: asOf },
@@ -39,7 +40,7 @@ export async function GET(req: Request) {
         locationConfidence: { not: 'low' },
         conflictId: { not: null },
       },
-      select: { conflictId: true, severity: true },
+      select: { conflictId: true, severity: true, publishedAt: true },
     }),
     // Recent events for globe blips (72h before asOf)
     prisma.event.findMany({
@@ -67,21 +68,22 @@ export async function GET(req: Request) {
     }),
   ])
 
-  // Historical threat per conflict, recomputed from the window's evidence
-  const sevByConflict = new Map<string, number[]>()
+  // Historical threat per conflict, recomputed from the lookback evidence,
+  // recency-weighted relative to asOf (decay reference = the replay instant).
+  const evByConflict = new Map<string, ThreatEvent[]>()
   for (const e of windowEvents) {
-    const list = sevByConflict.get(e.conflictId!) ?? []
-    list.push(e.severity)
-    sevByConflict.set(e.conflictId!, list)
+    const list = evByConflict.get(e.conflictId!) ?? []
+    list.push({ severity: e.severity, publishedAt: e.publishedAt })
+    evByConflict.set(e.conflictId!, list)
   }
 
   const historicalConflicts = conflicts
     .map(c => ({
       ...c,
-      threatLevel: threatFromSeverities(sevByConflict.get(c.id) ?? []),
+      threatLevel: threatFromEvents(evByConflict.get(c.id) ?? [], asOf),
     }))
-    // A conflict "existed" at asOf only if it had window evidence
-    .filter(c => sevByConflict.has(c.id))
+    // A conflict "existed" at asOf only if it had lookback evidence
+    .filter(c => evByConflict.has(c.id))
     .sort((a, b) => b.threatLevel - a.threatLevel)
 
   // Latest signal per conflict as of asOf

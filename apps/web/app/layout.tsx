@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Archivo, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
 import './globals.css'
+import Attribution from './components/Attribution'
 
 const archivo = Archivo({
   subsets: ['latin'],
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${archivo.variable} ${plexSans.variable} ${plexMono.variable}`}>
       <body className="min-h-screen">
         {children}
+        <Attribution />
       </body>
     </html>
   )

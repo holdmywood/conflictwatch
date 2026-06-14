@@ -10,6 +10,7 @@ import {
   recomputeConflictThreat,
 } from './pipeline/persist.js'
 import { initTrustGate } from './pipeline/trust.js'
+import { runUcdpPoll } from './pipeline/ucdp-poll.js'
 import { fetchBestLeadText } from './pipeline/fetcher.js'
 import { classifyCluster } from './ai/enricher.js'
 import {
@@ -294,9 +295,15 @@ async function main(): Promise<void> {
       console.error('[worker] staleness check error:', err)
     )
   )
+  // Curated UCDP layer — weekly, Mondays 06:00 UTC (UCDP Candidate updates
+  // ~monthly). Zero tokens: structured data, no classifier. Keeps multi-month
+  // historical depth current so long-running conflicts don't decay to level 1.
+  const ucdpTask = cron.schedule('0 6 * * 1', () =>
+    runUcdpPoll().catch(err => console.error('[worker] UCDP poll error:', err))
+  )
   console.log(
     '[worker] cron scheduled — polling every 5 min, assessments every hour, reports at midnight, ' +
-    `staleness alert at ${STALENESS_THRESHOLD_MIN}min`
+    `UCDP poll weekly, staleness alert at ${STALENESS_THRESHOLD_MIN}min`
   )
 
   const shutdown = async () => {
@@ -306,6 +313,7 @@ async function main(): Promise<void> {
     dailyTask.stop()
     watchlistTask.stop()
     stalenessTask.stop()
+    ucdpTask.stop()
     process.exit(0)
   }
 

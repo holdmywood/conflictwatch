@@ -1,16 +1,20 @@
-import { prisma, threatFromSeverities, THREAT_WINDOW_MS } from '@conflictwatch/db'
+import { prisma, threatFromEvents, THREAT_LOOKBACK_MS } from '@conflictwatch/db'
 import { toEventType, scoreConfidence } from './score.js'
 import { buildTitle } from './normalize.js'
 import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
 import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
+import type { CuratedEvent } from '../sources/ucdp.js'
 
-// Cumulative threat aggregation over AI severity scores (1–5).
-// The aggregation rule lives in @conflictwatch/db (threatFromSeverities) so
-// the web replay API recomputes history with identical logic. Only
-// medium/high confidence events with non-low locationConfidence count.
+// Recency-weighted threat aggregation over AI severity scores (1–5).
+// The aggregation rule lives in @conflictwatch/db (threatFromEvents) so the
+// web replay API recomputes history with identical logic. Only medium/high
+// confidence events with non-low locationConfidence count. The lookback is a
+// query-performance bound (~1yr); recency decay does the real attenuation, so
+// a year of backfilled history contributes at a decayed weight instead of
+// being dropped by a hard window.
 async function computeConflictThreat(cId: string): Promise<number> {
-  const cutoff = new Date(Date.now() - THREAT_WINDOW_MS)
+  const cutoff = new Date(Date.now() - THREAT_LOOKBACK_MS)
   const events = await prisma.event.findMany({
     where: {
       conflictId: cId,
@@ -19,12 +23,12 @@ async function computeConflictThreat(cId: string): Promise<number> {
       locationConfidence: { not: 'low' },
       classified: true,
     },
-    select: { severity: true },
+    select: { severity: true, publishedAt: true },
   })
-  return threatFromSeverities(events.map(e => e.severity))
+  return threatFromEvents(events)
 }
 
-function conflictId(countryCode: string): string {
+export function conflictId(countryCode: string): string {
   return `conflict-${countryCode.toLowerCase()}`
 }
 
@@ -192,6 +196,86 @@ export async function persistEvent(
   })
 
   return { conflictId: cId, discarded: false, eventId: eventRecord.id }
+}
+
+// ── Curated structured sources (UCDP) — the zero-token persist path ───────────
+// Writes a pre-structured event straight to the DB. There is deliberately NO
+// classifier call here: severity/title/category/location all come from the
+// curated dataset. `summarized: true` is set because the structured summary is
+// final, so the on-view AI-summary route never spends tokens on these either.
+// Idempotent: keyed on the `ucdp-<id>` clusterId, so re-running upserts.
+export async function persistCuratedEvent(
+  e: CuratedEvent,
+): Promise<{ conflictId: string; eventId: string; created: boolean }> {
+  const cId = conflictId(e.countryCode)
+
+  await prisma.conflict.upsert({
+    where: { id: cId },
+    create: {
+      id: cId,
+      name: e.region.split(',').pop()?.trim() || e.countryCode,
+      region: e.countryCode,
+      status: 'active',
+      threatLevel: 1, // threat comes only from recomputeConflictThreat
+      lat: e.lat,
+      lng: e.lng,
+    },
+    update: { status: 'active' },
+  })
+
+  const existing = await prisma.event.findUnique({
+    where: { clusterId: e.clusterId },
+    select: { id: true },
+  })
+
+  const eventRecord = await prisma.event.upsert({
+    where: { clusterId: e.clusterId },
+    create: {
+      clusterId: e.clusterId,
+      title: e.title,
+      summary: e.summary,
+      summarized: true,
+      eventType: e.eventType,
+      category: e.category,
+      significance: e.significance,
+      lat: e.lat,
+      lng: e.lng,
+      region: e.region,
+      confidence: e.confidence,
+      publishedAt: e.publishedAt,
+      conflictId: cId,
+      severity: e.severity,
+      sourceTier: e.sourceTier,
+      locationConfidence: e.locationConfidence,
+      classified: true,
+      firstReportAt: e.publishedAt,
+      signalAt: e.publishedAt,
+    },
+    update: {
+      title: e.title,
+      summary: e.summary,
+      severity: e.severity,
+      category: e.category,
+      significance: e.significance,
+      region: e.region,
+      lat: e.lat,
+      lng: e.lng,
+      locationConfidence: e.locationConfidence,
+    },
+  })
+
+  await prisma.eventSource.upsert({
+    where: { eventId_url: { eventId: eventRecord.id, url: e.sourceUrl } },
+    create: {
+      eventId: eventRecord.id,
+      name: e.sourceName,
+      url: e.sourceUrl,
+      publishedAt: e.publishedAt,
+    },
+    update: {},
+  })
+
+  return { conflictId: cId, eventId: eventRecord.id, created: !existing }
 }
 
 export async function updateHeartbeat(

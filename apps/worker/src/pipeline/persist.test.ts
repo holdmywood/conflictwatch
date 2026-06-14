@@ -191,17 +191,21 @@ describe('recomputeConflictThreat thresholds', () => {
     mockUpdate.mockReset().mockResolvedValue({})
   })
 
-  const cases: Array<[number, number]> = [
-    [15, 5], // 15 corroborated severity-5 events → level 5
-    [5, 4],  // 5 → level 4
-    [3, 3],  // 3 → level 3
-    [2, 2],  // 2 → level 2
-    [0, 1],  // none → level 1
+  // Threshold math itself is covered by threat-model.test.ts; here we assert
+  // recompute wires the windowed query into threatFromEvents and persists the
+  // result. A sustained year of severity-5 events is unambiguously level 5.
+  const daily = (severity: number, days: number) =>
+    Array.from({ length: days }, (_, d) => ({ severity, publishedAt: new Date(Date.now() - d * 86400_000) }))
+
+  const cases: Array<[ReturnType<typeof daily>, number]> = [
+    [daily(5, 365), 5], // sustained high-intensity war → level 5
+    [[], 1],            // no evidence → level 1
+    [daily(5, 1), 1],   // a single recent event never elevates
   ]
 
-  for (const [count, expected] of cases) {
-    it(`computes level ${expected} from ${count} corroborated severity-5 events`, async () => {
-      mockFindMany.mockResolvedValue(Array(count).fill({ severity: 5 }))
+  for (const [events, expected] of cases) {
+    it(`persists level ${expected} from ${events.length} corroborated events`, async () => {
+      mockFindMany.mockResolvedValue(events)
       const level = await recomputeConflictThreat('conflict-ua')
       expect(level).toBe(expected)
       expect(mockUpdate).toHaveBeenCalledWith(
@@ -281,13 +285,14 @@ describe('recomputeConflictThreat', () => {
   })
 
   it('updates the conflict with the freshly computed level', async () => {
-    mockFindMany.mockResolvedValue(Array(5).fill({ severity: 5 }))
+    const events = Array.from({ length: 365 }, (_, d) => ({ severity: 5, publishedAt: new Date(Date.now() - d * 86400_000) }))
+    mockFindMany.mockResolvedValue(events)
     const level = await recomputeConflictThreat('conflict-ua')
-    expect(level).toBe(4)
+    expect(level).toBe(5)
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'conflict-ua' },
-        data: { threatLevel: 4 },
+        data: { threatLevel: 5 },
       })
     )
   })

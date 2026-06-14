@@ -13,4 +13,11 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 export * from '@prisma/client'
 export { inferZonesFromRegion, REGION_ZONE_MAP } from './zone-matcher.ts'
 export { analogueDistance, ANALOGUE_SCALE, type AnalogueFeatures } from './analogue-distance.ts'
-export { threatFromSeverities, THREAT_WINDOW_MS, MIN_EVENTS } from './threat-model.ts'
+export {
+  threatFromEvents,
+  recencyWeight,
+  HALF_LIFE_MS,
+  THREAT_LOOKBACK_MS,
+  SUM_THRESHOLDS,
+  type ThreatEvent,
+} from './threat-model.ts'
