@@ -296,6 +296,29 @@ describe('recomputeConflictThreat', () => {
       })
     )
   })
+
+  it('sets the pin to the MEDIAN of event coordinates (outlier-resistant)', async () => {
+    const pub = new Date()
+    // Four events in Sudan + one misgeocoded outlier in Belfast.
+    mockFindMany.mockResolvedValue([
+      { severity: 3, publishedAt: pub, lat: 13.2, lng: 30.2 },
+      { severity: 3, publishedAt: pub, lat: 13.6, lng: 25.4 },
+      { severity: 3, publishedAt: pub, lat: 14.2, lng: 24.7 },
+      { severity: 3, publishedAt: pub, lat: 13.4, lng: 32.7 },
+      { severity: 3, publishedAt: pub, lat: 54.6, lng: -5.9 }, // Belfast outlier
+    ])
+    await recomputeConflictThreat('conflict-su')
+    const data = mockUpdate.mock.calls[0][0].data
+    expect(data.lat).toBe(13.6) // median lat → in Sudan, not dragged to Belfast
+    expect(data.lng).toBe(25.4) // median lng excludes the Belfast outlier (−5.9)
+  })
+
+  it('omits position when no event has valid coordinates', async () => {
+    mockFindMany.mockResolvedValue([{ severity: 5, publishedAt: new Date() }])
+    await recomputeConflictThreat('conflict-ua')
+    const data = mockUpdate.mock.calls[0][0].data
+    expect(data).not.toHaveProperty('lat')
+  })
 })
 
 describe('updateHeartbeat', () => {

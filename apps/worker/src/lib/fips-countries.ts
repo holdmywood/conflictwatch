@@ -44,7 +44,10 @@ export const FIPS_COUNTRY: Record<string, string> = {
   TU: 'Turkey', TW: 'Taiwan', TX: 'Turkmenistan', TZ: 'Tanzania', UG: 'Uganda',
   UK: 'United Kingdom', UP: 'Ukraine', US: 'United States', UV: 'Burkina Faso',
   UY: 'Uruguay', UZ: 'Uzbekistan', VE: 'Venezuela', VM: 'Vietnam', WE: 'West Bank',
-  WZ: 'Eswatini', YM: 'Yemen', ZA: 'Zambia', ZI: 'Zimbabwe', GZ: 'Gaza Strip',
+  WZ: 'Eswatini', YM: 'Yemen', ZA: 'Zambia', ZI: 'Zimbabwe',
+  // Note: Gaza is intentionally NOT a separate code — UCDP files Gaza events
+  // under Israel (IS), so 'Gaza Strip' resolves to IS via NAME_ALIASES, keeping
+  // the conflict unified instead of splitting off a fragment.
 }
 
 /** Canonical country name for a FIPS 10-4 code, or null if unknown. */
