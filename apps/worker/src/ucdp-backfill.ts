@@ -1,151 +1,85 @@
-// One-time historical backfill from UCDP — the ZERO-TOKEN path.
+// Global historical backfill from UCDP — the ZERO-TOKEN path.
 //
-// Loads ~12 months of curated armed-conflict events from UCDP (finalized GED +
-// current-year Candidate) and writes them straight to the DB with fields
-// derived from the dataset's own structure. There is NO classifier import in
-// this file, so it is impossible for it to spend Anthropic tokens — that is the
-// whole point: curated data needs no AI cleanup.
+// Loads ~12 months of curated armed-conflict events for the ENTIRE dataset (no
+// country target list) — finalized GED + current-year Candidate — and writes
+// them straight to the DB. Countries appear automatically because they're in
+// the data; nothing is named per-country in code. There is NO classifier import
+// here, so it cannot spend Anthropic tokens.
 //
-// Idempotent (upsert on `ucdp-<id>`) and resumable (a checkpoint file records
-// progress, so a crash continues instead of restarting). Cross-source dedup
-// against recent GDELT prevents double-counting the same incident.
+// Streams + date-filters the 274 MB GED so it doesn't OOM, then bulk-writes
+// (createMany, idempotent on `ucdp-<id>`). Cross-source dedup vs recent GDELT
+// avoids double-counting. Re-running is safe (skipDuplicates).
 //
 //   BACKFILL_DAYS=365 DATABASE_URL="<prod>" pnpm --filter worker exec tsx src/ucdp-backfill.ts
 //
-// Optional env: UCDP_GED_URL, UCDP_CANDIDATE_URL, BACKFILL_LIMIT (cap events,
-// for a test slice), UCDP_CHECKPOINT (checkpoint file path).
+// Optional: UCDP_GED_URL, UCDP_CANDIDATE_URL.
 
 import 'dotenv/config'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { prisma } from '@conflictwatch/db'
 import {
-  fetchUcdpEvents,
+  streamUcdpEvents,
+  resolveCandidateCsvUrls,
   UCDP_GED_ZIP_URL,
-  UCDP_CANDIDATE_CSV_URL,
   type CuratedEvent,
 } from './sources/ucdp.js'
-import { persistCuratedEvent, recomputeConflictThreat, conflictId } from './pipeline/persist.js'
+import { bulkPersistCurated, recomputeConflictThreat, conflictId } from './pipeline/persist.js'
 import { findGdeltNearDuplicate } from './pipeline/deduplicate.js'
 
 const DAYS = Number(process.env.BACKFILL_DAYS ?? 365)
-const LIMIT = process.env.BACKFILL_LIMIT ? Number(process.env.BACKFILL_LIMIT) : Infinity
 const GED_URL = process.env.UCDP_GED_URL ?? UCDP_GED_ZIP_URL
-const CANDIDATE_URL = process.env.UCDP_CANDIDATE_URL ?? UCDP_CANDIDATE_CSV_URL
-const CHECKPOINT = process.env.UCDP_CHECKPOINT ?? '.ucdp-backfill.checkpoint.json'
-
-// Only the recent overlap window can collide with our ~1-week GDELT data;
-// older curated events can't, so we skip the dedup query for them (cheaper).
 const DEDUP_WINDOW_MS = 30 * 24 * 3600 * 1000
-
-const TRANSIENT_DB_CODES = new Set(['P2024', 'P1001', 'P1017'])
-async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
-  let lastErr: unknown
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn()
-    } catch (err) {
-      lastErr = err
-      if (!TRANSIENT_DB_CODES.has((err as { code?: string }).code ?? '')) throw err
-      await new Promise(r => setTimeout(r, 250 * (i + 1)))
-    }
-  }
-  throw lastErr
-}
-
-function loadCheckpoint(): number {
-  if (!existsSync(CHECKPOINT)) return 0
-  try {
-    return Number(JSON.parse(readFileSync(CHECKPOINT, 'utf8')).index ?? 0) || 0
-  } catch {
-    return 0
-  }
-}
-function saveCheckpoint(index: number): void {
-  writeFileSync(CHECKPOINT, JSON.stringify({ index, savedAt: new Date().toISOString() }))
-}
 
 async function main(): Promise<void> {
   const dbHost = (process.env.DATABASE_URL ?? '').replace(/:[^:@/]*@/, ':***@').replace(/^.*@/, '')
   console.log(`[ucdp-backfill] target DB host: ${dbHost || '(unset!)'}`)
-  console.log(`[ucdp-backfill] days=${DAYS} ged=${GED_URL} candidate=${CANDIDATE_URL}`)
+  const sinceMs = Date.now() - DAYS * 24 * 3600 * 1000
 
-  const cutoff = new Date(Date.now() - DAYS * 24 * 3600 * 1000)
-  const nowMs = Date.now()
+  const candidateUrls = process.env.UCDP_CANDIDATE_URL
+    ? [process.env.UCDP_CANDIDATE_URL]
+    : await resolveCandidateCsvUrls()
+  console.log(`[ucdp-backfill] global pull, last ${DAYS}d | GED=${GED_URL} | candidates=${candidateUrls.length}`)
 
-  // Download + parse both products (zero tokens), filter to the window, merge.
-  console.log('[ucdp-backfill] downloading datasets…')
-  const [ged, candidate] = await Promise.all([
-    fetchUcdpEvents(GED_URL).catch(err => {
-      console.warn('[ucdp-backfill] GED fetch failed (continuing with candidate):', (err as Error).message)
-      return [] as CuratedEvent[]
-    }),
-    fetchUcdpEvents(CANDIDATE_URL).catch(err => {
-      console.warn('[ucdp-backfill] candidate fetch failed (continuing with GED):', (err as Error).message)
-      return [] as CuratedEvent[]
-    }),
-  ])
-
+  // Stream + window-filter every source (keeps memory bounded on the 274MB GED).
+  console.log('[ucdp-backfill] downloading + streaming datasets…')
+  const sources = [GED_URL, ...candidateUrls]
   const byId = new Map<string, CuratedEvent>()
-  for (const e of [...ged, ...candidate]) {
-    if (e.publishedAt >= cutoff) byId.set(e.clusterId, e) // candidate (later) wins on overlap
-  }
-  // Newest-first, so threat climbs visibly and a partial run still covers recent history.
-  const events = [...byId.values()].sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime())
-  console.log(`[ucdp-backfill] ${events.length} events within ${DAYS}d (ged=${ged.length} candidate=${candidate.length})`)
-
-  let start = loadCheckpoint()
-  if (start > 0) console.log(`[ucdp-backfill] resuming from checkpoint index ${start}`)
-
-  const touched = new Set<string>()
-  let created = 0
-  let updated = 0
-  let deduped = 0
-  let processed = 0
-
-  for (let i = start; i < events.length && processed < LIMIT; i++) {
-    const e = events[i]
+  for (const url of sources) {
     try {
-      // Cross-source dedup only where GDELT could actually overlap.
-      if (nowMs - e.publishedAt.getTime() <= DEDUP_WINDOW_MS) {
-        const dup = await withRetry(() =>
-          findGdeltNearDuplicate({ conflictId: conflictId(e.countryCode), lat: e.lat, lng: e.lng, publishedAt: e.publishedAt }),
-        )
-        if (dup) {
-          deduped++
-          continue
-        }
-      }
-
-      const { conflictId: cId, created: wasCreated } = await withRetry(() => persistCuratedEvent(e))
-      if (wasCreated) created++
-      else updated++
-      touched.add(cId)
+      const evs = await streamUcdpEvents(url, sinceMs)
+      for (const e of evs) byId.set(e.clusterId, e) // later sources (candidate) win on overlap
+      console.log(`[ucdp-backfill]   ${evs.length} in-window events from ${url.split('/').pop()}`)
     } catch (err) {
-      console.error(`[ucdp-backfill] event ${e.clusterId} skipped:`, (err as Error).message)
-    }
-
-    processed++
-    if (processed % 500 === 0) {
-      saveCheckpoint(i + 1)
-      // Recompute threat periodically so levels rise during the run.
-      for (const cId of touched) await recomputeConflictThreat(cId).catch(() => {})
-      console.log(
-        `[ucdp-backfill] processed=${processed} created=${created} updated=${updated} deduped=${deduped} conflicts=${touched.size}`,
-      )
+      console.warn(`[ucdp-backfill]   fetch failed for ${url}: ${(err as Error).message}`)
     }
   }
+  let events = [...byId.values()]
+  const countries = new Set(events.map(e => e.countryCode))
+  const estMin = Math.max(1, Math.round((events.length / 2000) * 0.5))
+  console.log(`[ucdp-backfill] ${events.length} events across ${countries.size} countries — est. load ~${estMin} min`)
 
-  console.log(`[ucdp-backfill] recomputing threat for ${touched.size} conflicts…`)
-  for (const cId of touched) {
-    await recomputeConflictThreat(cId).catch(err =>
-      console.error(`[ucdp-backfill] threat recompute failed for ${cId}:`, (err as Error).message),
-    )
+  // Cross-source dedup: only the recent overlap can collide with our ~1-week GDELT.
+  const nowMs = Date.now()
+  const recent = events.filter(e => nowMs - e.publishedAt.getTime() <= DEDUP_WINDOW_MS)
+  const dupes = new Set<string>()
+  for (const e of recent) {
+    const dup = await findGdeltNearDuplicate({ conflictId: conflictId(e.countryCode), lat: e.lat, lng: e.lng, publishedAt: e.publishedAt }).catch(() => null)
+    if (dup) dupes.add(e.clusterId)
+  }
+  if (dupes.size) {
+    events = events.filter(e => !dupes.has(e.clusterId))
+    console.log(`[ucdp-backfill] dropped ${dupes.size} GDELT-duplicate events`)
   }
 
-  saveCheckpoint(Math.min(start + processed, events.length))
-  console.log(
-    `[ucdp-backfill] DONE — processed=${processed} created=${created} updated=${updated} deduped=${deduped} conflicts=${touched.size}`,
-  )
+  console.log('[ucdp-backfill] bulk-writing…')
+  const { created, conflicts } = await bulkPersistCurated(events)
+  console.log(`[ucdp-backfill] wrote ${created} new events across ${conflicts.size} conflicts`)
+
+  console.log(`[ucdp-backfill] recomputing threat for ${conflicts.size} conflicts…`)
+  for (const cId of conflicts) {
+    await recomputeConflictThreat(cId).catch(err => console.error(`[ucdp-backfill] recompute ${cId}:`, (err as Error).message))
+  }
+
+  console.log(`[ucdp-backfill] DONE — events=${events.length} created=${created} conflicts=${conflicts.size} countries=${countries.size}`)
   await prisma.$disconnect()
 }
 

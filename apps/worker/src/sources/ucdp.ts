@@ -18,7 +18,10 @@
 
 import axios from 'axios'
 import AdmZip from 'adm-zip'
+import { Readable } from 'node:stream'
 import { parse } from 'csv-parse/sync'
+import { parse as parseStream } from 'csv-parse'
+import { fipsFromCountryName } from '../lib/fips-countries.js'
 
 // Default download URLs (overridable via env in the backfill/poll scripts).
 // Finalized GED (annual, 1989–latest) is zipped; Candidate (current year,
@@ -67,6 +70,9 @@ const GW_TO_FIPS: Record<string, string> = {
   '678': 'YM', '696': 'AE', '700': 'AF', '750': 'IN', '770': 'PK', '771': 'BG',
   '775': 'BM', '800': 'TH', '811': 'CB', '812': 'LA', '816': 'VM', '840': 'RP',
   '850': 'ID', '910': 'PP',
+  // Countries that appeared in the full GED but were previously dropped:
+  '94': 'CS', '145': 'BL', '160': 'AR', '338': 'MT', '434': 'BN', '461': 'TO',
+  '510': 'TZ', '694': 'QA', '790': 'NP',
 }
 
 // type_of_violence: 1 state-based, 2 non-state, 3 one-sided (against civilians)
@@ -133,7 +139,9 @@ export function mapUcdpRow(row: Record<string, string>): CuratedEvent | null {
   const id = row.id?.trim()
   if (!id) return null
 
-  const countryCode = GW_TO_FIPS[row.country_id?.trim() ?? '']
+  // Prefer the stable GW id; fall back to the country name so a country missing
+  // from the GW table is still placed (global coverage, no per-country list).
+  const countryCode = GW_TO_FIPS[row.country_id?.trim() ?? ''] ?? fipsFromCountryName(row.country ?? '')
   if (!countryCode) return null
 
   const lat = parseFloat(row.latitude)
@@ -223,6 +231,38 @@ export async function fetchUcdpEvents(url: string, timeoutMs = 120000): Promise<
   const events = parseUcdpCsv(csvText)
   const seen = new Set<string>()
   return events.filter(e => (seen.has(e.clusterId) ? false : (seen.add(e.clusterId), true)))
+}
+
+/**
+ * Stream a UCDP dataset and return only events on/after `sinceMs`. Streaming +
+ * early date-filtering keeps memory bounded — the finalized GED is ~418k rows
+ * (~274 MB uncompressed) and parsing it all at once OOMs Node's default heap.
+ * Pure HTTP + parse, no Anthropic call. Within-file duplicate ids collapse.
+ */
+export async function streamUcdpEvents(url: string, sinceMs: number, timeoutMs = 180000): Promise<CuratedEvent[]> {
+  let source: Readable
+  if (url.endsWith('.zip')) {
+    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: timeoutMs })
+    const zip = new AdmZip(Buffer.from(res.data))
+    const entry = zip.getEntries().find(e => e.entryName.toLowerCase().endsWith('.csv'))
+    if (!entry) throw new Error(`No CSV entry in UCDP zip: ${url}`)
+    source = Readable.from(entry.getData()) // entry buffer streamed row-by-row
+  } else {
+    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: timeoutMs })
+    source = Readable.from(Buffer.from(res.data))
+  }
+
+  const parser = source.pipe(parseStream({ columns: true, skip_empty_lines: true, relax_column_count: true, bom: true }))
+  const out: CuratedEvent[] = []
+  const seen = new Set<string>()
+  for await (const row of parser as AsyncIterable<Record<string, string>>) {
+    const mapped = mapUcdpRow(row)
+    if (mapped && mapped.publishedAt.getTime() >= sinceMs && !seen.has(mapped.clusterId)) {
+      seen.add(mapped.clusterId)
+      out.push(mapped)
+    }
+  }
+  return out
 }
 
 /** Parse a full UCDP CSV (candidate or finalized GED) into curated events. */

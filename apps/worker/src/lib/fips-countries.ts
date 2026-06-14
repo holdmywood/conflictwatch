@@ -60,3 +60,43 @@ export function conflictNameFromId(conflictId: string): string | null {
   const fips = conflictId.replace(/^conflict-/, '')
   return countryNameFromFips(fips)
 }
+
+// ── Reverse: country name → FIPS ──────────────────────────────────────────────
+// Used to recover the conflict country from an AI-corrected region string (whose
+// last segment is the country) and to map UCDP country names that lack a GW id.
+const normalizeName = (s: string): string =>
+  s.toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim()
+
+const NAME_TO_FIPS: Record<string, string> = (() => {
+  const m: Record<string, string> = {}
+  for (const [fips, name] of Object.entries(FIPS_COUNTRY)) m[normalizeName(name)] = fips
+  return m
+})()
+
+// Common naming variants that don't normalize to the canonical name above.
+const NAME_ALIASES: Record<string, string> = {
+  'usa': 'US', 'united states of america': 'US', 'uk': 'UK', 'britain': 'UK',
+  'great britain': 'UK', 'dr congo': 'CG', 'drc': 'CG', 'congo kinshasa': 'CG',
+  'congo brazzaville': 'CF', 'republic of the congo': 'CF', 'ivory coast': 'IV',
+  'cote divoire': 'IV', 'burma': 'BM', 'czech republic': 'EZ', 'south korea': 'KS',
+  'north korea': 'KN', 'palestine': 'WE', 'gaza': 'IS', 'gaza strip': 'IS',
+  'swaziland': 'WZ', 'cape verde': 'CV', 'east timor': 'TT', 'timor leste': 'TT',
+}
+
+/** FIPS code for a country name (handles UCDP "(…)" suffixes and aliases), or null. */
+export function fipsFromCountryName(name: string): string | null {
+  if (!name) return null
+  const n = normalizeName(name)
+  return NAME_TO_FIPS[n] ?? NAME_ALIASES[n] ?? null
+}
+
+/**
+ * FIPS code from a "City, Region, Country" string by reading the last segment.
+ * The AI enricher already resolves the true country into the region text, so
+ * this recovers the correct conflict country when GDELT's code is wrong.
+ */
+export function fipsFromRegion(region: string): string | null {
+  if (!region) return null
+  const last = region.split(',').pop()?.trim()
+  return last ? fipsFromCountryName(last) : null
+}

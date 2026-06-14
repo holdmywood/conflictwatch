@@ -7,7 +7,7 @@
 // this just keeps the multi-month historical depth fresh.
 
 import {
-  fetchUcdpEvents,
+  streamUcdpEvents,
   resolveCandidateCsvUrls,
   type CuratedEvent,
 } from '../sources/ucdp.js'
@@ -24,12 +24,10 @@ export async function runUcdpPoll(): Promise<{ created: number; updated: number;
 
   // Merge all candidate files (latest coverage wins on duplicate ids).
   const byId = new Map<string, CuratedEvent>()
-  const cutoff = Date.now() - POLL_WINDOW_MS
+  const sinceMs = Date.now() - POLL_WINDOW_MS
   for (const url of urls) {
     try {
-      for (const e of await fetchUcdpEvents(url)) {
-        if (e.publishedAt.getTime() >= cutoff) byId.set(e.clusterId, e)
-      }
+      for (const e of await streamUcdpEvents(url, sinceMs)) byId.set(e.clusterId, e)
     } catch (err) {
       console.warn(`[ucdp-poll] fetch failed for ${url}:`, (err as Error).message)
     }
