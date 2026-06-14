@@ -5,7 +5,7 @@ import { computeCoverageGapScore } from './surprise.js'
 import type { NormalizedEvent } from '../types.js'
 import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
 import type { CuratedEvent } from '../sources/ucdp.js'
-import { conflictNameFromId } from '../lib/fips-countries.js'
+import { conflictNameFromId, fipsFromRegion } from '../lib/fips-countries.js'
 
 // Recency-weighted threat aggregation over AI severity scores (1–5).
 // The aggregation rule lives in @conflictwatch/db (threatFromEvents) so the
@@ -114,16 +114,22 @@ export async function persistEvent(
     classify,
   )
 
-  const cId = conflictId(event.countryCode)
+  // Group by the AI-corrected country, not GDELT's ActionGeo code. GDELT
+  // frequently mis-codes the country (e.g. a Belfast riot coded as Sudan) even
+  // when the AI has resolved the true location; trust the corrected region's
+  // country when location confidence is high, else fall back to GDELT's code.
+  const correctedFips = loc.locationConfidence === 'high' ? fipsFromRegion(loc.region) : null
+  const countryCode = correctedFips ?? event.countryCode
+  const cId = conflictId(countryCode)
   // Name from the stable FIPS code, not GDELT's unreliable geo label.
-  const conflictName = conflictNameFromId(cId) ?? loc.region.split(',').pop()?.trim() ?? event.countryCode
+  const conflictName = conflictNameFromId(cId) ?? loc.region.split(',').pop()?.trim() ?? countryCode
 
   await prisma.conflict.upsert({
     where: { id: cId },
     create: {
       id: cId,
       name: conflictName,
-      region: event.countryCode,
+      region: countryCode,
       status: 'active',
       // Threat comes only from sustained corroborated evidence
       // (recomputeConflictThreat at cycle end) — never from one event.
@@ -285,6 +291,63 @@ export async function persistCuratedEvent(
   })
 
   return { conflictId: cId, eventId: eventRecord.id, created: !existing }
+}
+
+// Bulk curated load — the global-backfill fast path. Upserts distinct conflicts
+// (one per country, FIPS-named) then writes events and sources with createMany
+// (skipDuplicates → idempotent on the `ucdp-<id>` clusterId). Still zero tokens.
+// Returns the set of touched conflict ids for threat recompute. Chunked to keep
+// query sizes bounded.
+export async function bulkPersistCurated(
+  events: CuratedEvent[],
+  chunkSize = 2000,
+): Promise<{ created: number; conflicts: Set<string> }> {
+  const touched = new Set<string>()
+  const firstByConflict = new Map<string, CuratedEvent>()
+  for (const e of events) {
+    const cId = conflictId(e.countryCode)
+    touched.add(cId)
+    if (!firstByConflict.has(cId)) firstByConflict.set(cId, e)
+  }
+
+  for (const [cId, e] of firstByConflict) {
+    const name = conflictNameFromId(cId) ?? e.region.split(',').pop()?.trim() ?? e.countryCode
+    await prisma.conflict.upsert({
+      where: { id: cId },
+      create: { id: cId, name, region: e.countryCode, status: 'active', threatLevel: 1, lat: e.lat, lng: e.lng },
+      update: { ...(conflictNameFromId(cId) ? { name } : {}), status: 'active' },
+    })
+  }
+
+  let created = 0
+  for (let i = 0; i < events.length; i += chunkSize) {
+    const chunk = events.slice(i, i + chunkSize)
+    const r = await prisma.event.createMany({
+      data: chunk.map(e => ({
+        clusterId: e.clusterId, title: e.title, summary: e.summary, summarized: true,
+        eventType: e.eventType, category: e.category, significance: e.significance,
+        lat: e.lat, lng: e.lng, region: e.region, confidence: e.confidence,
+        publishedAt: e.publishedAt, conflictId: conflictId(e.countryCode),
+        severity: e.severity, sourceTier: e.sourceTier, locationConfidence: e.locationConfidence,
+        classified: true, firstReportAt: e.publishedAt, signalAt: e.publishedAt,
+      })),
+      skipDuplicates: true,
+    })
+    created += r.count
+    const ids = await prisma.event.findMany({
+      where: { clusterId: { in: chunk.map(e => e.clusterId) } },
+      select: { id: true, clusterId: true },
+    })
+    const byCluster = new Map(ids.map(row => [row.clusterId, row.id]))
+    await prisma.eventSource.createMany({
+      data: chunk
+        .map(e => ({ eventId: byCluster.get(e.clusterId)!, name: e.sourceName, url: e.sourceUrl, publishedAt: e.publishedAt }))
+        .filter(s => s.eventId),
+      skipDuplicates: true,
+    })
+  }
+
+  return { created, conflicts: touched }
 }
 
 export async function updateHeartbeat(

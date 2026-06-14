@@ -66,8 +66,14 @@ describe('mapUcdpRow', () => {
     expect(mapUcdpRow(GAZA_ROW)!.clusterId).toBe(mapUcdpRow(GAZA_ROW)!.clusterId)
   })
 
-  it('skips rows with an unmapped country', () => {
-    expect(mapUcdpRow({ ...GAZA_ROW, country_id: '999999' })).toBeNull()
+  it('falls back to the country name when the GW id is unknown (no country dropped)', () => {
+    // Unknown GW id but a recognizable name → still placed via name→FIPS.
+    const e = mapUcdpRow({ ...GAZA_ROW, country_id: '999999', country: 'Tanzania' })
+    expect(e?.countryCode).toBe('TZ')
+  })
+
+  it('skips rows only when neither GW id nor name resolves', () => {
+    expect(mapUcdpRow({ ...GAZA_ROW, country_id: '999999', country: 'Nowhereland' })).toBeNull()
   })
 
   it('skips rows with invalid or (0,0) coordinates', () => {

@@ -38,7 +38,7 @@ const sampleEvent: NormalizedEvent = {
   lat: 48.38,
   lng: 31.17,
   region: 'Kyiv, Ukraine',
-  countryCode: 'UA',
+  countryCode: 'UP', // FIPS 10-4 for Ukraine (GDELT's ActionGeo code)
   actor1Name: 'RUSSIA',
   actor1EthnicCode: '',
   actor1Religion1Code: '',
@@ -101,7 +101,7 @@ describe('persistEvent', () => {
   it('upserts a Conflict record keyed by countryCode', async () => {
     await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
     expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'conflict-ua' } })
+      expect.objectContaining({ where: { id: 'conflict-up' } })
     )
   })
 
@@ -168,7 +168,7 @@ describe('persistEvent', () => {
     await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
     expect(mockUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'conflict-ua' },
+        where: { id: 'conflict-up' },
         create: expect.objectContaining({ threatLevel: 1 }),
       })
     )
@@ -181,7 +181,7 @@ describe('persistEvent', () => {
 
   it('returns conflictId matching countryCode', async () => {
     const result = await persistEvent(sampleEvent, ['Reuters'], sampleClassify)
-    expect(result.conflictId).toBe('conflict-ua')
+    expect(result.conflictId).toBe('conflict-up')
   })
 })
 

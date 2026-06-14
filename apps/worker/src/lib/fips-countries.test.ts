@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countryNameFromFips, conflictNameFromId } from './fips-countries.js'
+import { countryNameFromFips, conflictNameFromId, fipsFromCountryName, fipsFromRegion } from './fips-countries.js'
 
 describe('countryNameFromFips', () => {
   it('maps the codes that were mislabeled in prod to the correct country', () => {
@@ -21,6 +21,33 @@ describe('countryNameFromFips', () => {
 
   it('returns null for unknown codes so the caller keeps the existing name', () => {
     expect(countryNameFromFips('ZZ')).toBeNull()
+  })
+})
+
+describe('fipsFromCountryName', () => {
+  it('maps canonical and aliased names, ignoring parentheticals and case', () => {
+    expect(fipsFromCountryName('Ukraine')).toBe('UP')
+    expect(fipsFromCountryName('United Kingdom')).toBe('UK')
+    expect(fipsFromCountryName('Myanmar (Burma)')).toBe('BM') // UCDP-style suffix
+    expect(fipsFromCountryName('DR Congo (Zaire)')).toBe('CG')
+    expect(fipsFromCountryName('Russia (Soviet Union)')).toBe('RS')
+    expect(fipsFromCountryName('USA')).toBe('US')
+    expect(fipsFromCountryName('Tanzania')).toBe('TZ')
+  })
+  it('returns null for unknown names', () => {
+    expect(fipsFromCountryName('Atlantis')).toBeNull()
+    expect(fipsFromCountryName('')).toBeNull()
+  })
+})
+
+describe('fipsFromRegion', () => {
+  it('recovers the country from the last segment of a region string', () => {
+    expect(fipsFromRegion('Belfast, United Kingdom')).toBe('UK') // the misgeocoding case
+    expect(fipsFromRegion('Sheraro, Ethiopia')).toBe('ET')
+    expect(fipsFromRegion('El-Obeid, Sudan')).toBe('SU')
+  })
+  it('returns null when the last segment is not a country', () => {
+    expect(fipsFromRegion('Somewhere, Nowhereland')).toBeNull()
   })
 })
 
