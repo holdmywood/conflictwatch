@@ -14,7 +14,23 @@ import { conflictNameFromId, fipsFromRegion } from '../lib/fips-countries.js'
 // query-performance bound (~1yr); recency decay does the real attenuation, so
 // a year of backfilled history contributes at a decayed weight instead of
 // being dropped by a hard window.
-async function computeConflictThreat(cId: string): Promise<number> {
+export function conflictId(countryCode: string): string {
+  return `conflict-${countryCode.toLowerCase()}`
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+// Recompute and store the threat level AND map position for a conflict from
+// current evidence. The pin is the MEDIAN of the conflict's corroborated event
+// coordinates — not whatever event last touched it — so a misgeocoded outlier
+// (or a since-moved event) can't drag e.g. Sudan's pin to Belfast. Exported for
+// callers that change the evidence base outside persistEvent (e.g. source
+// accrual upgrading confidence, or event reassignment).
+export async function recomputeConflictThreat(cId: string): Promise<number> {
   const cutoff = new Date(Date.now() - THREAT_LOOKBACK_MS)
   const events = await prisma.event.findMany({
     where: {
@@ -24,24 +40,19 @@ async function computeConflictThreat(cId: string): Promise<number> {
       locationConfidence: { not: 'low' },
       classified: true,
     },
-    select: { severity: true, publishedAt: true },
+    select: { severity: true, publishedAt: true, lat: true, lng: true },
   })
-  return threatFromEvents(events)
-}
+  const level = threatFromEvents(events)
 
-export function conflictId(countryCode: string): string {
-  return `conflict-${countryCode.toLowerCase()}`
-}
+  const data: { threatLevel: number; lat?: number; lng?: number } = { threatLevel: level }
+  const lats = events.map(e => e.lat).filter(Number.isFinite)
+  const lngs = events.map(e => e.lng).filter(Number.isFinite)
+  if (lats.length && lngs.length) {
+    data.lat = median(lats)
+    data.lng = median(lngs)
+  }
 
-// Recompute and store the threat level for a conflict from current evidence.
-// Exported for callers that change the evidence base outside persistEvent
-// (e.g. source accrual upgrading confidence).
-export async function recomputeConflictThreat(cId: string): Promise<number> {
-  const level = await computeConflictThreat(cId)
-  await prisma.conflict.update({
-    where: { id: cId },
-    data: { threatLevel: level },
-  })
+  await prisma.conflict.update({ where: { id: cId }, data })
   return level
 }
 
@@ -140,8 +151,8 @@ export async function persistEvent(
     update: {
       // Self-heal the name from FIPS only when we have a canonical one.
       ...(conflictNameFromId(cId) ? { name: conflictName } : {}),
-      lat: loc.lat,
-      lng: loc.lng,
+      // Position is owned by recomputeConflictThreat (median of events), not the
+      // latest event — so an outlier can't drag the pin off the country.
       status: 'active',
     },
   })
