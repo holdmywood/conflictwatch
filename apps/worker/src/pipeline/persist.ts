@@ -6,6 +6,7 @@ import type { NormalizedEvent } from '../types.js'
 import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
 import type { CuratedEvent } from '../sources/ucdp.js'
 import { conflictNameFromId, fipsFromRegion } from '../lib/fips-countries.js'
+import { looksLikeOrdinaryCrime } from '../lib/ordinary-crime.js'
 
 // Recency-weighted threat aggregation over AI severity scores (1–5).
 // The aggregation rule lives in @conflictwatch/db (threatFromEvents) so the
@@ -130,6 +131,11 @@ export async function persistEvent(
   // Title comes from AI; buildTitle is the fallback for unenriched events (backfill only)
   const title = classify.title
 
+  // Guard against GDELT mis-tagging ordinary crime/accidents as conflict — a
+  // "police shooting" or "car crash" must not feed a country's threat. Recategorize
+  // to 'other' (intensity weight 0). Conservative: skipped when conflict context exists.
+  const category = looksLikeOrdinaryCrime(title) ? 'other' : classify.category
+
   // Authoritative location: the AI corrects GDELT's frequently-wrong geocoding
   // when it is highly confident. Country-level grouping (cId) still keys off
   // GDELT's country code — correcting that requires the AI to emit a country
@@ -192,7 +198,7 @@ export async function persistEvent(
       // AI classify fields
       severity: classify.severity,
       significance: classify.significance,
-      category: classify.category,
+      category: category,
       stabilityImpact: classify.stability_impact,
       sourceTier: event.sourceTier,
       locationConfidence: loc.locationConfidence,
@@ -211,7 +217,7 @@ export async function persistEvent(
       // Re-classify updates these fields on re-ingest
       severity: classify.severity,
       significance: classify.significance,
-      category: classify.category,
+      category: category,
       stabilityImpact: classify.stability_impact,
       region: loc.region,
       lat: loc.lat,
