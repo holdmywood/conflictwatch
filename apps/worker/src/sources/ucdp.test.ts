@@ -43,6 +43,7 @@ describe('mapUcdpRow', () => {
     expect(e.lng).toBeCloseTo(34.495142, 5)
     expect(e.severity).toBe(2) // best=1
     expect(e.fatalities).toBe(1) // raw `best` stored for lethality weighting
+    expect(e.belligerents).toEqual(['IS']) // Govt of Israel → IS; Hamas (non-state) skipped
     expect(e.confidence).toBe('high')
     expect(e.locationConfidence).toBe('high')
     expect(e.category).toBe('armed-conflict')
@@ -61,6 +62,15 @@ describe('mapUcdpRow', () => {
     expect(e.summary).toContain('Best fatality estimate: 12')
     expect(e.summary).toContain('range 8–15')
     expect(e.summary).toContain('UCDP')
+  })
+
+  it('records both state belligerents for an interstate war (foreign-soil attribution)', () => {
+    const e = mapUcdpRow({
+      ...GAZA_ROW, country: 'Ukraine', country_id: '369',
+      side_a: 'Government of Russia (Soviet Union)', side_b: 'Government of Ukraine',
+    })!
+    expect(e.countryCode).toBe('UP')          // located in Ukraine
+    expect(e.belligerents.sort()).toEqual(['RS', 'UP']) // both parties → Russia inherits it
   })
 
   it('uses a stable clusterId so re-ingest is idempotent', () => {

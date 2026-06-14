@@ -71,6 +71,10 @@ model Event {
   // Fatality count (UCDP `best` estimate); 0 for sources without fatality data
   // (GDELT). Drives lethality-weighted threat intensity.
   fatalities         Int      @default(0)
+  // FIPS codes of the state belligerents (UCDP side_a/side_b governments). A
+  // country at war on foreign soil (e.g. Russia in Ukraine) inherits the
+  // conflict's threat through this, even though the event is located abroad.
+  belligerents       String[] @default([])
   significance       String   @default("")
   category           String   @default("")
   stabilityImpact    String   @default("")

@@ -6,6 +6,7 @@ import type { NormalizedEvent } from '../types.js'
 import { resolveLocation, type ClassifyResult } from '../ai/enricher.js'
 import type { CuratedEvent } from '../sources/ucdp.js'
 import { conflictNameFromId, fipsFromRegion } from '../lib/fips-countries.js'
+import { looksLikeOrdinaryCrime } from '../lib/ordinary-crime.js'
 
 // Recency-weighted threat aggregation over AI severity scores (1–5).
 // The aggregation rule lives in @conflictwatch/db (threatFromEvents) so the
@@ -32,15 +33,18 @@ function median(xs: number[]): number {
 // accrual upgrading confidence, or event reassignment).
 export async function recomputeConflictThreat(cId: string): Promise<number> {
   const cutoff = new Date(Date.now() - THREAT_LOOKBACK_MS)
+  const fips = cId.replace(/^conflict-/, '').toUpperCase()
+  // Threat counts the conflict's own (located-here) events PLUS events where
+  // this country is a belligerent fighting elsewhere — so Russia inherits the
+  // Russia-Ukraine war even though it's fought on Ukrainian soil.
   const events = await prisma.event.findMany({
     where: {
-      conflictId: cId,
-      publishedAt: { gte: cutoff },
-      confidence: { in: ['medium', 'high'] },
-      locationConfidence: { not: 'low' },
-      classified: true,
+      AND: [
+        { publishedAt: { gte: cutoff }, confidence: { in: ['medium', 'high'] }, locationConfidence: { not: 'low' }, classified: true },
+        { OR: [{ conflictId: cId }, { belligerents: { has: fips } }] },
+      ],
     },
-    select: { severity: true, publishedAt: true, lat: true, lng: true, fatalities: true, category: true, clusterId: true },
+    select: { severity: true, publishedAt: true, lat: true, lng: true, fatalities: true, category: true, clusterId: true, conflictId: true },
   })
   const level = threatFromEvents(
     events.map(e => ({
@@ -53,8 +57,11 @@ export async function recomputeConflictThreat(cId: string): Promise<number> {
   )
 
   const data: { threatLevel: number; lat?: number; lng?: number } = { threatLevel: level }
-  const lats = events.map(e => e.lat).filter(Number.isFinite)
-  const lngs = events.map(e => e.lng).filter(Number.isFinite)
+  // Pin uses only the country's OWN territorial events — belligerent events
+  // located abroad must not drag the pin off-country (Russia stays in Russia).
+  const own = events.filter(e => e.conflictId === cId)
+  const lats = own.map(e => e.lat).filter(Number.isFinite)
+  const lngs = own.map(e => e.lng).filter(Number.isFinite)
   if (lats.length && lngs.length) {
     data.lat = median(lats)
     data.lng = median(lngs)
@@ -124,6 +131,11 @@ export async function persistEvent(
   // Title comes from AI; buildTitle is the fallback for unenriched events (backfill only)
   const title = classify.title
 
+  // Guard against GDELT mis-tagging ordinary crime/accidents as conflict — a
+  // "police shooting" or "car crash" must not feed a country's threat. Recategorize
+  // to 'other' (intensity weight 0). Conservative: skipped when conflict context exists.
+  const category = looksLikeOrdinaryCrime(title) ? 'other' : classify.category
+
   // Authoritative location: the AI corrects GDELT's frequently-wrong geocoding
   // when it is highly confident. Country-level grouping (cId) still keys off
   // GDELT's country code — correcting that requires the AI to emit a country
@@ -186,7 +198,7 @@ export async function persistEvent(
       // AI classify fields
       severity: classify.severity,
       significance: classify.significance,
-      category: classify.category,
+      category: category,
       stabilityImpact: classify.stability_impact,
       sourceTier: event.sourceTier,
       locationConfidence: loc.locationConfidence,
@@ -205,7 +217,7 @@ export async function persistEvent(
       // Re-classify updates these fields on re-ingest
       severity: classify.severity,
       significance: classify.significance,
-      category: classify.category,
+      category: category,
       stabilityImpact: classify.stability_impact,
       region: loc.region,
       lat: loc.lat,
@@ -280,6 +292,7 @@ export async function persistCuratedEvent(
       conflictId: cId,
       severity: e.severity,
       fatalities: e.fatalities,
+      belligerents: e.belligerents,
       sourceTier: e.sourceTier,
       locationConfidence: e.locationConfidence,
       classified: true,
@@ -349,8 +362,8 @@ export async function bulkPersistCurated(
         eventType: e.eventType, category: e.category, significance: e.significance,
         lat: e.lat, lng: e.lng, region: e.region, confidence: e.confidence,
         publishedAt: e.publishedAt, conflictId: conflictId(e.countryCode),
-        severity: e.severity, fatalities: e.fatalities, sourceTier: e.sourceTier,
-        locationConfidence: e.locationConfidence,
+        severity: e.severity, fatalities: e.fatalities, belligerents: e.belligerents,
+        sourceTier: e.sourceTier, locationConfidence: e.locationConfidence,
         classified: true, firstReportAt: e.publishedAt, signalAt: e.publishedAt,
       })),
       skipDuplicates: true,

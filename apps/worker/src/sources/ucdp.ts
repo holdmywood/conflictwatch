@@ -41,6 +41,7 @@ export interface CuratedEvent {
   lng: number
   severity: number // 1–5
   fatalities: number // UCDP `best` estimate — drives lethality-weighted intensity
+  belligerents: string[] // FIPS codes of state parties (side_a/side_b governments)
   eventType: string
   category: string
   significance: string
@@ -118,6 +119,21 @@ function significanceFor(severity: number): string {
   return 'local-isolated'
 }
 
+/**
+ * FIPS codes of the state belligerents from UCDP side names. Government parties
+ * ("Government of Russia (Soviet Union)") map to their country; non-state actors
+ * (rebels, cartels) don't map and are skipped. This is what lets an aggressor
+ * fighting on foreign soil inherit the conflict's threat.
+ */
+function belligerentFips(sideA: string, sideB: string): string[] {
+  const out = new Set<string>()
+  for (const side of [sideA, sideB]) {
+    const f = fipsFromCountryName((side ?? '').replace(/^Government of\s+/i, ''))
+    if (f) out.add(f)
+  }
+  return [...out]
+}
+
 /** Parse UCDP's "YYYY-MM-DD HH:MM:SS.mmm" date_start as UTC midnight. */
 function parseUcdpDate(s: string): Date | null {
   const d = new Date(`${s.slice(0, 10)}T00:00:00Z`)
@@ -181,6 +197,7 @@ export function mapUcdpRow(row: Record<string, string>): CuratedEvent | null {
     lng,
     severity,
     fatalities: best,
+    belligerents: belligerentFips(row.side_a ?? '', row.side_b ?? ''),
     eventType: VIOLENCE_EVENT_TYPE[tov] ?? 'armed_conflict',
     category: VIOLENCE_CATEGORY[tov] ?? 'armed-conflict',
     significance: significanceFor(severity),

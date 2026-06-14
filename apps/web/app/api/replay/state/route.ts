@@ -40,7 +40,7 @@ export async function GET(req: Request) {
         locationConfidence: { not: 'low' },
         conflictId: { not: null },
       },
-      select: { conflictId: true, severity: true, publishedAt: true, fatalities: true, category: true, clusterId: true },
+      select: { conflictId: true, severity: true, publishedAt: true, fatalities: true, category: true, clusterId: true, belligerents: true },
     }),
     // Recent events for globe blips (72h before asOf)
     prisma.event.findMany({
@@ -71,16 +71,25 @@ export async function GET(req: Request) {
   // Historical threat per conflict, recomputed from the lookback evidence,
   // recency-weighted relative to asOf (decay reference = the replay instant).
   const evByConflict = new Map<string, ThreatEvent[]>()
+  const add = (conflictId: string, e: ThreatEvent) => {
+    const list = evByConflict.get(conflictId) ?? []
+    list.push(e)
+    evByConflict.set(conflictId, list)
+  }
   for (const e of windowEvents) {
-    const list = evByConflict.get(e.conflictId!) ?? []
-    list.push({
+    const te: ThreatEvent = {
       severity: e.severity,
       publishedAt: e.publishedAt,
       fatalities: e.fatalities,
       category: e.category,
       curated: e.clusterId.startsWith('ucdp-'),
-    })
-    evByConflict.set(e.conflictId!, list)
+    }
+    add(e.conflictId!, te) // where it occurred
+    // …and each state belligerent, so a country at war abroad inherits it.
+    for (const fips of e.belligerents ?? []) {
+      const bId = `conflict-${fips.toLowerCase()}`
+      if (bId !== e.conflictId) add(bId, te)
+    }
   }
 
   const historicalConflicts = conflicts
