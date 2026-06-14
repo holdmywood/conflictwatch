@@ -5,3 +5,6 @@ dist/
 .next/
 *.tsbuildinfo
 .DS_Store
+
+# UCDP backfill resume checkpoint
+*.checkpoint.json
