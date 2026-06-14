@@ -21,8 +21,14 @@
  * instead of being filtered out entirely.
  */
 
-/** Recency half-life: an event's weight halves every 35 days. */
-export const HALF_LIFE_MS = 35 * 24 * 60 * 60 * 1000
+/**
+ * Recency half-life: an event's weight halves every 60 days. Conflict-level
+ * threat is slow-moving — a 35-day half-life "forgot" an active war within ~2
+ * months of quiet, dropping a sustained conflict toward level 1. 60 days lets
+ * an established war hold a high level across a quiet stretch while still
+ * decaying a genuinely resolved conflict over ~6 months.
+ */
+export const HALF_LIFE_MS = 60 * 24 * 60 * 60 * 1000
 
 /**
  * How far back to load events for aggregation. Beyond ~6 half-lives the
@@ -33,13 +39,13 @@ export const THREAT_LOOKBACK_MS = 365 * 24 * 60 * 60 * 1000
 
 /**
  * Cumulative decayed severity-sum needed to reach each level. Calibrated for
- * SUSTAINED inflow under the 35-day half-life (effective accumulation window
- * ≈ HALF_LIFE/ln2 ≈ 50 days), so a year of steady activity at a given tempo
- * settles at a stable level. Level 5 is reserved for Ukraine-scale sustained
- * combat. These are starting values tuned empirically against the loaded
- * dataset (GDELT live + UCDP history).
+ * SUSTAINED inflow under the 60-day half-life (effective accumulation window
+ * ≈ HALF_LIFE/ln2 ≈ 87 days), so a year of steady activity at a given tempo
+ * settles at a stable level. Level 5 is reserved for the most intense sustained
+ * conflicts (Ukraine/Nigeria/Mexico scale). Tuned against the loaded dataset
+ * (GDELT live + UCDP history): Ukraine ≈ 212, Israel ≈ 116, noise stays low.
  */
-export const SUM_THRESHOLDS: Partial<Record<number, number>> = { 5: 160, 4: 70, 3: 30, 2: 10 }
+export const SUM_THRESHOLDS: Partial<Record<number, number>> = { 5: 200, 4: 100, 3: 40, 2: 13 }
 
 /** An event's contribution to the aggregation: its severity and when it occurred. */
 export interface ThreatEvent {
